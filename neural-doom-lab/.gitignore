@@ -1,0 +1,43 @@
+# Dependências
+node_modules/
+frontend/node_modules/
+
+# Builds gerados
+dist/
+frontend/dist/
+engine/build/
+
+# Toolchains e caches
+.emsdk/
+.tooling/
+.playwright/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+cache/
+.venv/
+venv/
+
+# Arquivos locais
+.env*
+.vscode/
+.idea/
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+Thumbs.db
+
+# Dados proprietários do DOOM
+*.wad
+*.iwad
+
+# Freedoom já está incorporado ao bundle WebAssembly redistribuível.
