@@ -7,6 +7,37 @@ Schema completo em `schema.sql`, dividido em 4 blocos.
 
 Define o "formato" do cérebro (quantas camadas, quantos neurônios, quais conexões existem), sem nenhum peso ainda. É compartilhado entre todos os NPCs do mesmo tipo.
 
+## Mapeamento de entradas e saídas
+`nn_neuron` → `nn_neuron_io`
+
+O script `02_io_mapping.sql` cria a tabela `nn_neuron_io`, usada somente para dar significado aos neurônios de entrada e saída. O tipo do neurônio não é repetido nessa tabela, pois já é definido por `nn_layer.tipo`.
+
+Entradas mapeadas:
+
+- `HEALTH`
+- `PLAYER_DISTANCE`
+- `PLAYER_VISIBLE`
+- `CURRENT_STATE`
+
+Saídas mapeadas:
+
+- `IDLE`
+- `CHASE`
+- `ATTACK`
+- `FLEE`
+
+## Arquitetura inicial de teste
+
+O script `03_seed_architecture.sql` cria a arquitetura `npc_teste_4_6_4`, organizada em:
+
+- 4 neurônios de entrada
+- 6 neurônios ocultos com ReLU
+- 4 neurônios de saída com sigmoid
+
+As conexões são criadas somente entre camadas vizinhas e de forma completa, resultando em 48 sinapses. A camada de entrada apenas recebe os valores; a função de ativação armazenada nela não deve fazer parte do processamento futuro.
+
+Os scripts de mapeamento e arquitetura foram mantidos separados de `schema.sql`.
+
 ## Bloco 2 — Genoma (pesos individuais)
 `nn_genome` → `nn_genome_weight` / `nn_genome_bias`
 
@@ -33,6 +64,8 @@ Cada vez que um NPC precisa decidir uma ação, cria-se um `nn_run`. As ativaç�
 
 ## Pendências (próxima etapa)
 
-- Stored procedures: `forward_pass()`, `criar_genoma_aleatorio()`, `avaliar_fitness()`, `crossover()`, `mutar()`
-- Seed data: uma arquitetura de teste e um nível simples com paredes
-- Integração com a engine do jogo (loop principal, renderização, input)
+- Genoma inicial com pesos e biases
+- Forward pass e decisão da rede
+- Cálculo de fitness
+- Crossover e mutação
+- Integração da rede com o backend/Doom
