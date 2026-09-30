@@ -51,23 +51,45 @@ app.innerHTML = `
   <main class="shell">
     <header class="site-header">
       <a class="brand" href="#top" aria-label="Neural Doom Lab — início">
-        <span>
-          <strong><span>Neural</span> <em>Doom</em> <span>Lab</span></strong>
+        <span class="brand-mark" aria-hidden="true">☠</span>
+        <span class="brand-copy">
+          <strong><em>Neural</em> <span>Doom Lab</span></strong>
           <small>IA jogando Freedoom 2</small>
         </span>
       </a>
+      <p class="header-tagline">Experimentos em IA<br />para ambientes complexos<br />de games clássicos.</p>
       <div class="header-actions">
         <span class="status-pill" id="status-pill" data-tone="ready"><i aria-hidden="true"></i>Engine ready</span>
         <nav class="site-nav" aria-label="Navegação principal">
-          <a href="#about">Sobre</a>
+          <a href="#about">Sobre</a><span aria-hidden="true">|</span><a href="https://github.com/GabrielAlex01/Rede-Neural" rel="noreferrer">GitHub</a>
         </nav>
       </div>
+      <span class="header-insignia" aria-hidden="true"><strong>UAC</strong><small>Learning<br />different<br />worlds</small></span>
     </header>
 
     <section class="workbench" id="top">
+      <section class="panel session-panel">
+        <h2><span class="panel-icon" aria-hidden="true">▰</span>Sessão</h2>
+        <dl class="session-data">
+          <div><dt>Projeto</dt><dd>Neural Doom Lab</dd></div>
+          <div><dt>Status</dt><dd class="live-value"><i aria-hidden="true"></i><span id="session-engine-state">Aguardando Play</span></dd></div>
+          <div><dt>WAD</dt><dd id="session-wad">freedoom2.wad</dd></div>
+          <div><dt>Modo da IA</dt><dd id="session-ai-mode">ORIGINAL_AI</dd></div>
+        </dl>
+        <blockquote>“Mesmos demônios.<br />Novas ideias.”</blockquote>
+        <div class="session-watermark" aria-hidden="true"><strong>UAC</strong><span>Science<br />through<br />play</span></div>
+      </section>
+
       <div class="viewport-frame">
         <div class="viewport-heading">
-          <strong>Jogo</strong>
+          <strong><span class="panel-icon" aria-hidden="true">◆</span>Jogo</strong>
+          <div class="viewport-toolbar">
+            <div class="actions">
+              <button id="play-button" class="button button-primary"><span aria-hidden="true">▶</span> Play</button>
+              <button id="fullscreen-button" class="button" disabled><span aria-hidden="true">⛶</span> Fullscreen</button>
+              <button id="pointer-button" class="button" disabled><span aria-hidden="true">⌖</span> Pointer</button>
+            </div>
+          </div>
           <span id="selection-summary">Usando Freedoom 2 (bundle)</span>
         </div>
         <div class="canvas-shell" id="canvas-shell">
@@ -77,67 +99,59 @@ app.innerHTML = `
             <small>Carregue um WAD opcional ou pressione Play.</small>
           </div>
         </div>
-        <div class="viewport-toolbar">
-          <div class="actions">
-            <button id="play-button" class="button button-primary"><span aria-hidden="true">▶</span> Play</button>
-            <button id="fullscreen-button" class="button" disabled>Fullscreen</button>
-            <button id="pointer-button" class="button" disabled>Pointer</button>
-          </div>
-        </div>
       </div>
 
-      <section class="status-strip" aria-label="Estado da integração">
-        <section class="panel ai-panel" id="ai-controls">
-          <h2>Controle da IA</h2>
-          <label class="field">
-            <span>Modo de operação</span>
-            <select id="ai-mode">
-              <option value="original">ORIGINAL_AI</option>
-              <option value="external">EXTERNAL_AI</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Fonte de decisão</span>
-            <select id="ai-provider">
-              <option value="backend">WebSocket backend (mock)</option>
-              <option value="local">Local mock</option>
-            </select>
-          </label>
-        </section>
+      <section class="panel ai-panel" id="ai-controls">
+        <h2><span class="panel-icon" aria-hidden="true">◉</span>Controle da IA</h2>
+        <label class="field">
+          <span>Modo de operação</span>
+          <select id="ai-mode">
+            <option value="original">ORIGINAL_AI</option>
+            <option value="external">EXTERNAL_AI</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Fonte de decisão</span>
+          <select id="ai-provider">
+            <option value="backend">WebSocket backend (mock)</option>
+            <option value="local">Local mock</option>
+          </select>
+        </label>
+      </section>
 
-        <section class="panel connection-panel">
-          <h2>Conexão</h2>
-          <div class="connection-status" data-status="disconnected">
-            <span class="signal-dot" aria-hidden="true"></span>
-            <div><small>WebSocket bridge</small><strong id="ai-debug-backend">Disconnected</strong></div>
-          </div>
-          <code>ws://127.0.0.1:8000/ws/ai</code>
-        </section>
+      <section class="panel connection-panel">
+        <h2><span class="panel-icon" aria-hidden="true">⌁</span>Conexão</h2>
+        <div class="connection-status" data-status="disconnected">
+          <span class="signal-dot" aria-hidden="true"></span>
+          <div><small>WebSocket bridge</small><strong id="ai-debug-backend">Disconnected</strong></div>
+        </div>
+        <code>ws://127.0.0.1:8000/ws/ai</code>
+      </section>
 
-        <section class="panel npc-panel" id="npc-status">
-          <h2>NPC atual</h2>
-          <dl class="ai-debug" id="ai-debug">
-            <div><dt>Mode</dt><dd id="ai-debug-mode">ORIGINAL_AI</dd></div>
-            <div><dt>NPC</dt><dd id="ai-debug-npc">—</dd></div>
-            <div><dt>State</dt><dd id="ai-debug-state">—</dd></div>
-            <div><dt>Action</dt><dd id="ai-debug-action">Original engine</dd></div>
-          </dl>
-        </section>
-        <section class="utility-strip" id="utilities" aria-label="Utilidades">
-        <section class="utility-panel">
-          <h2>Controles</h2>
-          <div class="controls">
-            <p><span>Mover</span><strong>WASD / setas</strong></p>
-            <p><span>Atirar</span><strong>Ctrl</strong></p>
-            <p><span>Usar / abrir</span><strong>Espaço</strong></p>
-            <p><span>Correr</span><strong>Shift</strong></p>
-            <p><span>Pointer look</span><strong>Opcional</strong></p>
-          </div>
-        </section>
+      <section class="panel npc-panel" id="npc-status">
+        <h2><span class="panel-icon" aria-hidden="true">☠</span>NPC atual</h2>
+        <dl class="ai-debug" id="ai-debug">
+          <div><dt>Mode</dt><dd id="ai-debug-mode">ORIGINAL_AI</dd></div>
+          <div><dt>NPC</dt><dd id="ai-debug-npc">—</dd></div>
+          <div><dt>State</dt><dd id="ai-debug-state">—</dd></div>
+          <div><dt>Action</dt><dd id="ai-debug-action">Original engine</dd></div>
+        </dl>
+      </section>
 
-        <section class="utility-panel wad-panel">
-          <h2>Arquivo WAD</h2>
-          <div class="utility-content">
+      <section class="utility-panel controls-panel" id="utilities">
+        <h2><span class="panel-icon" aria-hidden="true">⌨</span>Controles</h2>
+        <div class="controls">
+          <p><span>Mover</span><strong>WASD / setas</strong></p>
+          <p><span>Atirar</span><strong>Ctrl</strong></p>
+          <p><span>Usar / abrir</span><strong>Espaço</strong></p>
+          <p><span>Correr</span><strong>Shift</strong></p>
+          <p><span>Pointer look</span><strong>Opcional</strong></p>
+        </div>
+      </section>
+
+      <section class="utility-panel wad-panel">
+        <h2><span class="panel-icon" aria-hidden="true">▤</span>WAD / Arquivos</h2>
+        <div class="utility-content">
           <label class="field file-field">
             <span>IWAD / WAD opcional</span>
             <input id="wad-input" type="file" accept=".wad,.iwad" multiple />
@@ -152,16 +166,14 @@ app.innerHTML = `
           </label>
           <p class="note">Use somente arquivos que você possui.</p>
           <p class="note note-muted" id="persisted-note"></p>
-          </div>
-        </section>
-        </section>
+        </div>
       </section>
     </section>
 
     <section class="log-panel panel">
       <div class="log-heading">
-        <h2>Log de eventos</h2>
-        <button id="clear-log-button" class="text-button" type="button">Limpar log</button>
+        <h2><span class="panel-icon" aria-hidden="true">▤</span>Log de eventos</h2>
+        <button id="clear-log-button" class="text-button" type="button"><span aria-hidden="true">▰</span> Limpar log</button>
       </div>
       <pre id="log-output" class="log-output" aria-live="polite"></pre>
     </section>
@@ -188,6 +200,9 @@ const canvasShell = document.querySelector('#canvas-shell');
 const canvasOverlay = document.querySelector('#canvas-overlay');
 const statusPill = document.querySelector('#status-pill');
 const selectionSummary = document.querySelector('#selection-summary');
+const sessionEngineState = document.querySelector('#session-engine-state');
+const sessionWad = document.querySelector('#session-wad');
+const sessionAiMode = document.querySelector('#session-ai-mode');
 const logOutput = document.querySelector('#log-output');
 const persistedNote = document.querySelector('#persisted-note');
 const aiMode = document.querySelector('#ai-mode');
@@ -445,6 +460,7 @@ function syncAiMode({ log = true } = {}) {
   const modeName = isExternal ? 'EXTERNAL_AI' : 'ORIGINAL_AI';
 
   aiDebugMode.textContent = modeName;
+  sessionAiMode.textContent = modeName;
   aiProvider.disabled = !isExternal;
 
   if (!isExternal) {
@@ -474,8 +490,11 @@ function setStatus(label, tone = 'ready') {
     Running: 'Engine online',
     Error: 'Engine error',
   };
-  statusPill.innerHTML = `<i aria-hidden="true"></i>${labels[label] ?? label}`;
+  const resolvedLabel = labels[label] ?? label;
+  statusPill.innerHTML = `<i aria-hidden="true"></i>${resolvedLabel}`;
   statusPill.dataset.tone = tone;
+  sessionEngineState.textContent = resolvedLabel;
+  sessionEngineState.parentElement.dataset.tone = tone;
 }
 
 function sanitizeFilename(name) {
@@ -624,6 +643,9 @@ function prepareVirtualFilesystem(module, selection) {
 function syncSelectionSummary() {
   const selection = classifyUploads(state.cachedUploads, wadMode.value);
   selectionSummary.textContent = summarizeSelection(selection);
+  sessionWad.textContent = selection.addons.length
+    ? `${selection.iwad.name} + ${selection.addons.length}`
+    : selection.iwad.name;
 }
 
 async function cacheUploads(files) {
@@ -766,6 +788,7 @@ canvas.addEventListener('click', () => {
   }
 });
 
+setStatus('Ready');
 updateButtons();
 syncSelectionSummary();
 renderPersistedSelection();
