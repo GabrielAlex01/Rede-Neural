@@ -49,7 +49,7 @@ O estado de um mobj é associado ao seu genoma por `nn_engine_session` e `nn_ses
 
 ## Inferência em SQL
 
-`sp_nn_decide` valida entrada e sessão, associa o NPC a um genoma, normaliza as quatro entradas, calcula cada ativação com `fn_nn_activate`, grava `nn_decision_run` e `nn_decision_activation` e devolve a saída de maior valor (`IDLE`, `CHASE`, `ATTACK` ou `FLEE`) e confiança. Cada run representa uma decisão real solicitada pelo engine.
+`sp_nn_decide` valida entrada e sessão, associa o NPC a um genoma, normaliza as quatro entradas, calcula cada ativação por expressão `CASE` SQL dentro da procedure, grava `nn_decision_run` e `nn_decision_activation` e devolve a saída de maior valor (`IDLE`, `CHASE`, `ATTACK` ou `FLEE`) e confiança. A expressão inline evita exigir o privilégio global `SUPER` ou alterar `log_bin_trust_function_creators` em servidores MySQL com binary logging habilitado. Cada run representa uma decisão real solicitada pelo engine.
 
 Ativações, pesos e decisões podem ser consultados por `run_id`:
 

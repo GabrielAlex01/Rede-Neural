@@ -57,37 +57,6 @@ CREATE TABLE IF NOT EXISTS nn_decision_activation (
 
 DROP FUNCTION IF EXISTS fn_nn_activate;
 DELIMITER $$
-CREATE FUNCTION fn_nn_activate(p_valor DOUBLE, p_funcao VARCHAR(16))
-RETURNS DOUBLE
-DETERMINISTIC
-NO SQL
-BEGIN
-    IF p_valor IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ativação recebeu valor nulo';
-    END IF;
-
-    CASE p_funcao
-        WHEN 'sigmoid' THEN
-            IF p_valor >= 40 THEN
-                RETURN 1;
-            ELSEIF p_valor <= -40 THEN
-                RETURN 0;
-            END IF;
-            RETURN 1 / (1 + EXP(-p_valor));
-        WHEN 'relu' THEN
-            RETURN GREATEST(p_valor, 0);
-        WHEN 'tanh' THEN
-            IF p_valor >= 20 THEN
-                RETURN 1;
-            ELSEIF p_valor <= -20 THEN
-                RETURN -1;
-            END IF;
-            RETURN (EXP(2 * p_valor) - 1) / (EXP(2 * p_valor) + 1);
-        ELSE
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Função de ativação não suportada';
-    END CASE;
-END$$
-
 DROP PROCEDURE IF EXISTS sp_nn_decide$$
 CREATE PROCEDURE sp_nn_decide(
     IN p_session_id CHAR(36),
@@ -332,10 +301,28 @@ BEGIN
 
         INSERT INTO nn_decision_activation (run_id, neuron_id, valor)
         SELECT p_run_id, destino.id,
-            fn_nn_activate(
-                COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0),
-                destino.funcao_ativacao
-            )
+            CASE destino.funcao_ativacao
+                WHEN 'sigmoid' THEN
+                    CASE
+                        WHEN COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0) >= 40 THEN 1
+                        WHEN COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0) <= -40 THEN 0
+                        ELSE 1 / (1 + EXP(-(COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0))))
+                    END
+                WHEN 'relu' THEN GREATEST(
+                    COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0),
+                    0
+                )
+                WHEN 'tanh' THEN
+                    CASE
+                        WHEN COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0) >= 20 THEN 1
+                        WHEN COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0) <= -20 THEN -1
+                        ELSE (
+                            EXP(2 * (COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0))) - 1
+                        ) / (
+                            EXP(2 * (COALESCE(SUM(peso.peso * ativacao.valor), 0) + COALESCE(bias.bias, 0))) + 1
+                        )
+                    END
+            END
         FROM nn_layer camada_destino
         JOIN nn_neuron destino ON destino.layer_id = camada_destino.id
         LEFT JOIN nn_genome_bias bias

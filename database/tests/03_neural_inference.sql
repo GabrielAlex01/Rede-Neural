@@ -38,12 +38,6 @@ BEGIN
     DECLARE v_same_engine_id_sessions INT DEFAULT 0;
     DECLARE v_session_genomes INT DEFAULT 0;
 
-    IF ABS(fn_nn_activate(0, 'sigmoid') - 0.5) > 0.000001
-       OR fn_nn_activate(-2, 'relu') <> 0
-       OR ABS(fn_nn_activate(0, 'tanh')) > 0.000001 THEN
-        SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT = 'Função de ativação não retornou o valor conhecido';
-    END IF;
-
     CALL sp_nn_decide(
         '11111111-1111-4111-8111-111111111111', 'npc-um', 1,
         80, 100, 2048, 1, 42, v_run_id, v_action, v_confidence
@@ -121,4 +115,4 @@ DELIMITER ;
 CALL test_assert_nn_inference();
 DROP PROCEDURE test_assert_nn_inference;
 
-SELECT 'OK: ativações, normalização, forward pass, escolha da maior saída e entradas inválidas.' AS resultado;
+SELECT 'OK: ativações SQL, normalização, forward pass, escolha da maior saída e entradas inválidas.' AS resultado;
