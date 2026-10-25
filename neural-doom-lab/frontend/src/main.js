@@ -496,6 +496,17 @@ function disconnectAiBackend(status = 'Disconnected') {
   setBackendStatus(status);
 }
 
+async function waitForAiRequestsToDrain(timeoutMs = 1700) {
+  const deadline = Date.now() + timeoutMs;
+  while (aiBridgeState.inflight.size > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+
+  if (aiBridgeState.inflight.size > 0) {
+    appendLog('info', `[AI BRIDGE] encerrando com ${aiBridgeState.inflight.size} decisão(ões) ainda sem resposta.`);
+  }
+}
+
 async function finishAiSession() {
   const sessionId = state.sessionId;
   const socket = aiBridgeState.socket;
@@ -503,6 +514,9 @@ async function finishAiSession() {
 
   stopAiMetricsSync();
   if (sessionId) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      await waitForAiRequestsToDrain();
+    }
     if (socket?.readyState === WebSocket.OPEN) {
       closed = await new Promise((resolve) => {
         const timeout = window.setTimeout(() => finish(false), 2500);
