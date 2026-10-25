@@ -35,13 +35,66 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
         try:
             while True:
                 message = await websocket.receive_json()
+                if not isinstance(message, dict):
+                    await websocket.send_json({
+                        "type": "npc_action",
+                        "request_id": None,
+                        "npc_id": None,
+                        "action": "INVALID",
+                        "reason": "invalid_request",
+                    })
+                    continue
+
                 request_id = message.get("request_id") if isinstance(message, dict) else None
                 npc = message.get("npc") if isinstance(message, dict) else None
                 session_id = message.get("session_id") if isinstance(message, dict) else None
 
+                if message.get("type") == "combat_event":
+                    event = message.get("event")
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(
+                                app.state.decision_service.record_combat_event,
+                                session_id,
+                                event,
+                            ),
+                            timeout=1.5,
+                        )
+                        stored = True
+                        reason = None
+                    except (InvalidRequest, asyncio.TimeoutError):
+                        stored = False
+                        reason = "invalid_event_or_mysql_unavailable"
+                    except DecisionError as exc:
+                        logger.warning("Combat event was not stored: %s", exc)
+                        stored = False
+                        reason = "mysql_unavailable"
+
+                    await websocket.send_json({
+                        "type": "combat_event_ack",
+                        "event_id": event.get("event_id") if isinstance(event, dict) else None,
+                        "stored": stored,
+                        "reason": reason,
+                    })
+                    continue
+
+                if message.get("type") == "session_end":
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(
+                                app.state.decision_service.close_session,
+                                session_id,
+                            ),
+                            timeout=1.5,
+                        )
+                        closed = True
+                    except (InvalidRequest, DecisionError, asyncio.TimeoutError):
+                        closed = False
+                    await websocket.send_json({"type": "session_end_ack", "closed": closed})
+                    continue
+
                 if (
-                    not isinstance(message, dict)
-                    or message.get("type") != "npc_state"
+                    message.get("type") != "npc_state"
                     or not isinstance(request_id, str)
                     or not request_id.strip()
                     or not isinstance(npc, dict)

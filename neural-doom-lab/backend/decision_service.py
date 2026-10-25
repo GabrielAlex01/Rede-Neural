@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 
 VALID_ACTIONS = {"IDLE", "CHASE", "ATTACK", "FLEE"}
+COMBAT_EVENT_TYPES = {"PLAYER_DAMAGE", "PLAYER_KILL", "NPC_DAMAGE", "NPC_DEATH"}
 
 
 class DecisionError(RuntimeError):
@@ -25,6 +26,8 @@ class ConnectionPool(Protocol):
 
 class DecisionService(Protocol):
     def decide(self, session_id: Any, npc: Any) -> dict[str, Any]: ...
+    def record_combat_event(self, session_id: Any, event: Any) -> None: ...
+    def close_session(self, session_id: Any) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -187,3 +190,77 @@ class DatabaseDecisionService:
             "action": action,
             "confidence": float(confidence),
         }
+
+    def record_combat_event(self, session_id: Any, event: Any) -> None:
+        if not isinstance(event, dict):
+            raise InvalidRequest("combat_event precisa ser um objeto")
+        try:
+            canonical_session_id = str(uuid.UUID(session_id))
+            event_id = str(uuid.UUID(event.get("event_id")))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise InvalidRequest("ID do evento ou da sessão inválido") from exc
+
+        npc_id = event.get("npc_id")
+        if isinstance(npc_id, bool) or not isinstance(npc_id, (str, int)):
+            raise InvalidRequest("npc_id inválido")
+        engine_npc_id = str(npc_id).strip()
+        if not engine_npc_id or len(engine_npc_id) > 64 or (isinstance(npc_id, int) and npc_id < 0):
+            raise InvalidRequest("npc_id inválido")
+
+        event_type = event.get("event_type")
+        if not isinstance(event_type, str) or event_type not in COMBAT_EVENT_TYPES:
+            raise InvalidRequest("event_type inválido")
+        value = event.get("value")
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2_147_483_647:
+            raise InvalidRequest("value fora do intervalo permitido")
+        if event_type in {"PLAYER_KILL", "NPC_DEATH"} and value != 1:
+            raise InvalidRequest("eventos de morte devem ter valor 1")
+
+        connection = None
+        cursor = None
+        try:
+            connection = self._get_pool().get_connection()
+            cursor = connection.cursor()
+            cursor.callproc(
+                "sp_nn_record_combat_event",
+                (event_id, canonical_session_id, engine_npc_id, event_type, value),
+            )
+            connection.commit()
+        except Exception as exc:
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+            raise DecisionError("O registro do evento MySQL falhou") from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
+
+    def close_session(self, session_id: Any) -> None:
+        try:
+            canonical_session_id = str(uuid.UUID(session_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise InvalidRequest("ID da sessão inválido") from exc
+
+        connection = None
+        cursor = None
+        try:
+            connection = self._get_pool().get_connection()
+            cursor = connection.cursor()
+            cursor.callproc("sp_nn_close_session", (canonical_session_id,))
+            connection.commit()
+        except Exception as exc:
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+            raise DecisionError("O encerramento da sessão MySQL falhou") from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()

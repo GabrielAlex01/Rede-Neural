@@ -23,6 +23,8 @@ class StubService:
         self.result = result or {"run_id": 17, "action": "CHASE", "confidence": 0.75}
         self.error = error
         self.calls = []
+        self.events = []
+        self.closed_sessions = []
 
     def decide(self, session_id, npc):
         validate_observation(session_id, npc)
@@ -30,6 +32,12 @@ class StubService:
         if self.error:
             raise self.error
         return self.result
+
+    def record_combat_event(self, session_id, event):
+        self.events.append((session_id, event))
+
+    def close_session(self, session_id):
+        self.closed_sessions.append(session_id)
 
 
 class FakeCursor:
@@ -112,6 +120,36 @@ class DecisionServiceTests(unittest.TestCase):
         with self.assertRaises(DecisionError):
             service.decide(SESSION_ID, NPC)
 
+    def test_combat_telemetry_is_sent_to_sql_procedure(self):
+        cursor = FakeCursor(())
+        connection = FakeConnection(cursor)
+        service = DatabaseDecisionService(FakePool(connection))
+        event = {
+            "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+            "npc_id": 3052044,
+            "event_type": "PLAYER_DAMAGE",
+            "value": 12,
+        }
+
+        service.record_combat_event(SESSION_ID, event)
+
+        self.assertEqual(cursor.procedure, "sp_nn_record_combat_event")
+        self.assertEqual(cursor.parameters[0], event["event_id"])
+        self.assertEqual(cursor.parameters[2], "3052044")
+        self.assertEqual(cursor.parameters[3], "PLAYER_DAMAGE")
+        self.assertTrue(connection.committed)
+
+    def test_session_close_is_sent_to_sql_procedure(self):
+        cursor = FakeCursor(())
+        connection = FakeConnection(cursor)
+        service = DatabaseDecisionService(FakePool(connection))
+
+        service.close_session(SESSION_ID)
+
+        self.assertEqual(cursor.procedure, "sp_nn_close_session")
+        self.assertEqual(cursor.parameters[0], SESSION_ID)
+        self.assertTrue(connection.committed)
+
 
 class WebSocketBridgeTests(unittest.TestCase):
     def test_returns_action_and_preserves_request_and_npc_ids(self):
@@ -163,6 +201,31 @@ class WebSocketBridgeTests(unittest.TestCase):
 
         self.assertEqual(response["action"], "INVALID")
         self.assertEqual(response["reason"], "invalid_database_result")
+
+    def test_combat_event_and_session_end_are_forwarded(self):
+        service = StubService()
+        client = TestClient(create_app(service))
+        event = {
+            "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+            "npc_id": 3052044,
+            "event_type": "PLAYER_DAMAGE",
+            "value": 12,
+        }
+
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "combat_event",
+                "session_id": SESSION_ID,
+                "event": event,
+            })
+            event_response = websocket.receive_json()
+            websocket.send_json({"type": "session_end", "session_id": SESSION_ID})
+            session_response = websocket.receive_json()
+
+        self.assertTrue(event_response["stored"])
+        self.assertEqual(service.events, [(SESSION_ID, event)])
+        self.assertTrue(session_response["closed"])
+        self.assertEqual(service.closed_sessions, [SESSION_ID])
 
     def test_malformed_observation_returns_invalid(self):
         service = StubService()

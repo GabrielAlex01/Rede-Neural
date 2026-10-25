@@ -189,6 +189,7 @@ const state = {
   engine: null,
   running: false,
   sessionId: null,
+  telemetryQueue: [],
 };
 
 const playButton = document.querySelector('#play-button');
@@ -264,6 +265,42 @@ const aiBridgeState = {
   socket: null,
 };
 
+function flushTelemetryQueue() {
+  if (aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  while (state.telemetryQueue.length) {
+    const message = state.telemetryQueue.shift();
+    if (message.session_id === state.sessionId) {
+      aiBridgeState.socket.send(JSON.stringify(message));
+    }
+  }
+}
+
+function sendCombatTelemetry(event) {
+  if (!state.sessionId) {
+    return;
+  }
+
+  const message = {
+    type: 'combat_event',
+    session_id: state.sessionId,
+    event,
+  };
+
+  if (aiBridgeState.socket?.readyState === WebSocket.OPEN) {
+    aiBridgeState.socket.send(JSON.stringify(message));
+    return;
+  }
+
+  if (state.telemetryQueue.length >= 500) {
+    state.telemetryQueue.shift();
+    appendLog('error', '[AI BRIDGE] fila de telemetria cheia; um evento antigo foi descartado.');
+  }
+  state.telemetryQueue.push(message);
+}
+
 function setBackendStatus(status) {
   connectionStatus.dataset.status = status.startsWith('Connected')
     ? 'connected'
@@ -310,11 +347,24 @@ function connectAiBackend() {
 
   socket.addEventListener('open', () => {
     setBackendStatus('Connected');
+    flushTelemetryQueue();
   });
 
   socket.addEventListener('message', (event) => {
     try {
       const response = JSON.parse(event.data);
+
+      if (response.type === 'combat_event_ack') {
+        if (!response.stored) {
+          appendLog('error', `[AI BRIDGE] evento de combate não persistido (${response.reason ?? 'erro'}).`);
+        }
+        return;
+      }
+
+      if (response.type === 'session_end_ack') {
+        return;
+      }
+
       const pendingRequest = aiBridgeState.inflight.get(response.request_id);
       aiBridgeState.inflight.delete(response.request_id);
 
@@ -371,6 +421,21 @@ function disconnectAiBackend(status = 'Disconnected') {
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
   setBackendStatus(status);
+}
+
+function finishAiSession() {
+  if (state.sessionId && aiBridgeState.socket?.readyState === WebSocket.OPEN) {
+    flushTelemetryQueue();
+    aiBridgeState.socket.send(JSON.stringify({
+      type: 'session_end',
+      session_id: state.sessionId,
+    }));
+  }
+
+  state.sessionId = null;
+  state.telemetryQueue = [];
+  aiBridgeState.decisions.clear();
+  aiBridgeState.inflight.clear();
 }
 
 function requestBackendDecision(npcState) {
@@ -454,6 +519,19 @@ globalThis.doomNeuralAIBridge = {
   reportError(error) {
     appendLog('error', `[AI BRIDGE] ${error instanceof Error ? error.message : String(error)}`);
   },
+
+  reportCombatEvent(event) {
+    try {
+      sendCombatTelemetry({
+        event_id: globalThis.crypto.randomUUID(),
+        npc_id: event.npc_id,
+        event_type: event.event_type,
+        value: event.value,
+      });
+    } catch (error) {
+      appendLog('error', `[AI BRIDGE] falha ao identificar evento de combate: ${error}`);
+    }
+  },
 };
 
 function syncAiMode({ log = true } = {}) {
@@ -466,9 +544,11 @@ function syncAiMode({ log = true } = {}) {
   aiProvider.disabled = !isExternal;
 
   if (!isExternal) {
+    finishAiSession();
     disconnectAiBackend('Inativo — selecione EXTERNAL_AI');
     renderAiState(null, 'Original engine');
   } else if (aiProvider.value === 'backend') {
+    state.sessionId ||= globalThis.crypto.randomUUID();
     connectAiBackend();
   } else {
     disconnectAiBackend();
@@ -688,6 +768,7 @@ async function launchEngine() {
   const selection = classifyUploads(state.cachedUploads, wadMode.value);
   const args = buildCliArgs(selection);
   state.sessionId = globalThis.crypto.randomUUID();
+  state.telemetryQueue = [];
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
 
@@ -785,6 +866,18 @@ aiProvider.addEventListener('change', () => {
     setBackendStatus('Local mock selected');
   }
   appendLog('info', `[AI BRIDGE] decision source set to ${aiProvider.value}.`);
+});
+
+window.addEventListener('pagehide', () => {
+  if (!state.sessionId || aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  flushTelemetryQueue();
+  aiBridgeState.socket.send(JSON.stringify({
+    type: 'session_end',
+    session_id: state.sessionId,
+  }));
 });
 
 canvas.addEventListener('click', () => {
