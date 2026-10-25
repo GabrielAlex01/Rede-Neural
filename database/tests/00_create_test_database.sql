@@ -1,4 +1,5 @@
--- Os testes usam um schema separado e não removem dados existentes.
+-- Bootstrap de teste com nome fixo: cria/seleciona npc_neural_game_test.
+-- Para schemas isolados existentes, NÃO execute este arquivo; siga database/modelagem.md.
 CREATE DATABASE IF NOT EXISTS npc_neural_game_test
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;

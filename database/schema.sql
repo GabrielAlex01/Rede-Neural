@@ -2,9 +2,8 @@
 -- PROJETO: Rede Neural em Tabelas MySQL para IA de NPCs (estilo Doom)
 -- Modelagem do banco de dados
 
--- Selecione o schema de destino antes de executar este arquivo.
--- Para a instalação normal, execute 00_create_database.sql primeiro.
--- Para testes, selecione npc_neural_game_test e execute os mesmos scripts.
+-- Este arquivo não seleciona nem cria schema. Selecione e confira o schema de destino
+-- no Workbench antes de executar; use schemas isolados para jogo e testes.
 -- Este schema é dividido em 4 blocos:
 --   1. Estrutura da rede neural (topologia/arquitetura)
 --   2. Genoma (pesos individuais por NPC + evolução)

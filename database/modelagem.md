@@ -2,9 +2,15 @@
 
 O MySQL Server executa a inferência, registra o desempenho e evolui os genomas. MySQL Workbench é o cliente usado para instalar, consultar e administrar o schema; FastAPI não implementa a lógica neural nem o treinamento.
 
-## Instalação
+## Instalação segura no MySQL Workbench
 
-Na conexão local do Workbench, execute `00_create_database.sql`, selecione `npc_neural_game` e rode uma vez, nesta ordem:
+Os arquivos `00_create_database.sql` e `tests/00_create_test_database.sql` são bootstraps de desenvolvimento com nomes fixos (`npc_neural_game` e `npc_neural_game_test`). Eles executam `CREATE DATABASE IF NOT EXISTS` e `USE` para esses nomes; **não os execute** ao instalar nos schemas locais já criados, pois podem selecionar bancos existentes com esses nomes.
+
+Para este ambiente, use somente `neural_doom_local_game_20261024` e `neural_doom_local_sql_test_20261024`. Antes de instalar, confirme no Workbench que a conexão é o MySQL Server 8.0 na porta 3306, que ambos os nomes existem e que cada schema tem zero tabelas e zero rotinas. Não prossiga se algum nome estiver ausente ou contiver objetos.
+
+Os sete arquivos de instalação abaixo não contêm `USE` nem nomes de schema qualificados; eles operam no schema padrão da aba SQL atual. Para **cada arquivo**, selecione o schema de destino no painel **SCHEMAS** do Workbench e execute `SELECT DATABASE();` na mesma aba. Só execute o arquivo quando o resultado for exatamente o schema esperado. Repita a conferência ao alternar entre jogo e testes.
+
+No schema `neural_doom_local_game_20261024`, execute uma vez, nesta ordem:
 
 1. `schema.sql`
 2. `02_io_mapping.sql`
@@ -21,6 +27,8 @@ CALL sp_nn_create_initial_population('npc_teste_4_6_4', 8);
 ```
 
 A procedure exige ao menos dois indivíduos, valida topologia/mapeamentos/conexões, gera pesos e biases aleatórios em `[-1, 1]` e não sobrescreve genomas existentes. Pesos iniciais aleatórios não representam treinamento concluído.
+
+No schema `neural_doom_local_sql_test_20261024`, instale os mesmos sete arquivos, na mesma ordem, mas **não crie população manualmente**. A suíte SQL cria os genomas e grava fixtures sintéticas nesse schema.
 
 ## Topologia e representação
 
@@ -111,6 +119,14 @@ ORDER BY g.geracao, g.fitness DESC, g.id;
 
 ## Testes reproduzíveis
 
-Os testes SQL devem rodar somente em schema vazio separado do banco de jogo. Em Workbench, execute `tests/00_create_test_database.sql`; selecione `npc_neural_game_test`; instale `schema.sql`, `02_io_mapping.sql`, `03_seed_architecture.sql`, `04_genome_initialization.sql`, `05_neural_inference.sql`, `06_combat_telemetry.sql` e `07_genetic_evolution.sql`; rode `tests/01_assert_architecture.sql` até `tests/05_genetic_evolution.sql` em ordem. `02_genome_initialization.sql` cria quatro genomas para os testes. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures em banco de teste. Nenhum desses resultados é dado de uma partida.
+Com `neural_doom_local_sql_test_20261024` selecionado e confirmado por `SELECT DATABASE();`, execute uma vez, nesta ordem:
 
-Para reexecutar, escolha um novo schema vazio de teste ou remova somente o schema de teste que você criou após conferir o nome; os scripts não apagam schemas automaticamente. A suíte não deve ser executada no schema `npc_neural_game`.
+1. `tests/01_assert_architecture.sql`
+2. `tests/02_genome_initialization.sql`
+3. `tests/03_neural_inference.sql`
+4. `tests/04_combat_telemetry.sql`
+5. `tests/05_genetic_evolution.sql`
+
+Não execute nenhum desses cinco arquivos no schema de jogo. Eles criam e removem procedures auxiliares de teste, ajustam pesos de fixtures e gravam sessões/eventos sintéticos; não removem tabelas ou schemas, mas alteram os dados do schema de teste. `02_genome_initialization.sql` cria quatro genomas. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures. Nenhum resultado é dado de uma partida real.
+
+Os scripts de instalação também usam `DROP PROCEDURE/FUNCTION IF EXISTS` para substituir rotinas com os mesmos nomes no schema selecionado. Como os schemas locais foram confirmados vazios, esses comandos não encontram rotinas existentes. Não execute os scripts sobre schemas com dados. Para repetir a suíte, use outro schema de teste vazio já verificado; não apague nem reutilize schemas.
