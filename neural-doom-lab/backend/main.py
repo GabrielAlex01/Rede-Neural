@@ -1,65 +1,138 @@
-from typing import Any
+import asyncio
+import logging
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from backend.decision_service import (
+    DatabaseDecisionService,
+    DecisionError,
+    DecisionService,
+    InvalidRequest,
+)
 
-app = FastAPI(title="Doom Neural AI Mock Bridge")
+
+load_dotenv(Path(__file__).with_name(".env"))
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("neural_doom")
 
 VALID_ACTIONS = {"IDLE", "CHASE", "ATTACK", "FLEE"}
 
 
-def choose_mock_action(npc: dict[str, Any]) -> str:
-    """Small deterministic policy that can later be replaced by a model."""
-    if npc.get("health", 100) <= 20:
-        return "FLEE"
+def create_app(service: DecisionService | None = None) -> FastAPI:
+    app = FastAPI(title="Neural Doom Lab MySQL Bridge")
+    app.state.decision_service = service or DatabaseDecisionService.from_environment()
 
-    if npc.get("player_visible") and npc.get("player_distance", 999999) <= 128:
-        return "ATTACK"
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok", "decision_source": "mysql"}
 
-    return "CHASE"
+    @app.websocket("/ws/ai")
+    async def ai_bridge(websocket: WebSocket) -> None:
+        await websocket.accept()
 
+        try:
+            while True:
+                message = await websocket.receive_json()
+                request_id = message.get("request_id") if isinstance(message, dict) else None
+                npc = message.get("npc") if isinstance(message, dict) else None
+                session_id = message.get("session_id") if isinstance(message, dict) else None
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+                if (
+                    not isinstance(message, dict)
+                    or message.get("type") != "npc_state"
+                    or not isinstance(request_id, str)
+                    or not request_id.strip()
+                    or not isinstance(npc, dict)
+                ):
+                    await websocket.send_json(
+                        {
+                            "type": "npc_action",
+                            "request_id": request_id,
+                            "npc_id": npc.get("npc_id") if isinstance(npc, dict) else None,
+                            "action": "INVALID",
+                            "reason": "invalid_request",
+                        }
+                    )
+                    continue
 
+                try:
+                    decision = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            app.state.decision_service.decide,
+                            session_id,
+                            npc,
+                        ),
+                        timeout=1.5,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("MySQL decision exceeded the WebSocket response deadline")
+                    decision = None
+                    reason = "mysql_unavailable"
+                except InvalidRequest as exc:
+                    logger.info("Rejected invalid NPC state: %s", exc)
+                    decision = None
+                    reason = "invalid_request"
+                except DecisionError as exc:
+                    logger.warning("MySQL decision unavailable: %s", exc)
+                    decision = None
+                    reason = "mysql_unavailable"
+                except Exception:
+                    logger.exception("Unexpected error while requesting a MySQL decision")
+                    decision = None
+                    reason = "decision_error"
 
-@app.websocket("/ws/ai")
-async def ai_bridge(websocket: WebSocket) -> None:
-    await websocket.accept()
+                if decision is None:
+                    await websocket.send_json(
+                        {
+                            "type": "npc_action",
+                            "request_id": request_id,
+                            "npc_id": npc.get("npc_id"),
+                            "action": "INVALID",
+                            "reason": reason,
+                        }
+                    )
+                    continue
 
-    try:
-        while True:
-            message = await websocket.receive_json()
-            request_id = message.get("request_id")
-            npc = message.get("npc")
+                action = decision.get("action")
+                run_id = decision.get("run_id")
+                confidence = decision.get("confidence")
+                if (
+                    not isinstance(action, str)
+                    or action not in VALID_ACTIONS
+                    or isinstance(run_id, bool)
+                    or not isinstance(run_id, int)
+                    or run_id <= 0
+                    or isinstance(confidence, bool)
+                    or not isinstance(confidence, (int, float))
+                    or not 0 <= confidence <= 1
+                ):
+                    await websocket.send_json(
+                        {
+                            "type": "npc_action",
+                            "request_id": request_id,
+                            "npc_id": npc.get("npc_id"),
+                            "action": "INVALID",
+                            "reason": "invalid_database_result",
+                        }
+                    )
+                    continue
 
-            if message.get("type") != "npc_state" or not request_id or not isinstance(npc, dict):
                 await websocket.send_json(
                     {
                         "type": "npc_action",
                         "request_id": request_id,
-                        "npc_id": npc.get("npc_id") if isinstance(npc, dict) else None,
-                        "action": "INVALID",
+                        "npc_id": npc.get("npc_id"),
+                        "action": action,
+                        "run_id": run_id,
+                        "confidence": confidence,
                     }
                 )
-                continue
+        except WebSocketDisconnect:
+            logger.info("Frontend disconnected from the MySQL bridge")
 
-            action = choose_mock_action(npc)
-            assert action in VALID_ACTIONS
+    return app
 
-            print(
-                f"NPC {npc.get('npc_id')} received: "
-                f"state={npc.get('current_state')} -> action={action}",
-                flush=True,
-            )
-            await websocket.send_json(
-                {
-                    "type": "npc_action",
-                    "request_id": request_id,
-                    "npc_id": npc.get("npc_id"),
-                    "action": action,
-                }
-            )
-    except WebSocketDisconnect:
-        print("Frontend disconnected.", flush=True)
+
+app = create_app()

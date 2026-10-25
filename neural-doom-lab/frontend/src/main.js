@@ -113,8 +113,8 @@ app.innerHTML = `
         <label class="field">
           <span>Fonte de decisão</span>
           <select id="ai-provider">
-            <option value="backend">WebSocket backend (mock)</option>
-            <option value="local">Local mock</option>
+            <option value="backend">MySQL neural (via backend)</option>
+            <option value="local">Local mock (desenvolvimento)</option>
           </select>
         </label>
       </section>
@@ -188,6 +188,7 @@ const state = {
   cachedUploads: [],
   engine: null,
   running: false,
+  sessionId: null,
 };
 
 const playButton = document.querySelector('#play-button');
@@ -385,6 +386,7 @@ function requestBackendDecision(npcState) {
   aiBridgeState.socket.send(JSON.stringify({
     type: 'npc_state',
     request_id: requestId,
+    session_id: state.sessionId,
     npc: npcState,
   }));
 }
@@ -440,7 +442,7 @@ globalThis.doomNeuralAIBridge = {
     if (now - aiBridgeState.lastResultLogAt >= 1000) {
       const actionName = AI_ACTION_NAME[result.action] ?? 'INVALID';
       const outcome = result.applied ? 'applied by engine' : 'rejected; ORIGINAL_AI fallback';
-      const source = aiProvider.value === 'backend' ? 'backend' : 'local mock';
+      const source = aiProvider.value === 'backend' ? 'MySQL' : 'local mock';
       appendLog('info', `[AI BRIDGE] NPC ${result.npc_id}: state received → ${source} ${actionName} → ${outcome}.`);
       renderAiState(pending.npcState, `${actionName} (${outcome})`);
       aiBridgeState.lastResultLogAt = now;
@@ -685,6 +687,9 @@ async function launchEngine() {
 
   const selection = classifyUploads(state.cachedUploads, wadMode.value);
   const args = buildCliArgs(selection);
+  state.sessionId = globalThis.crypto.randomUUID();
+  aiBridgeState.decisions.clear();
+  aiBridgeState.inflight.clear();
 
   setStatus('Booting', 'busy');
   appendLog('info', `Launching Chocolate Doom with args: ${args.join(' ')}`);
