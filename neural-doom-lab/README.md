@@ -101,19 +101,18 @@ O jogo não garante que todos os genomas da população apareçam em cada mapa. 
 
 ## Experimentos com redes maiores
 
-A MLP de referência `4→6→4` permanece intacta. No Workbench, crie uma arquitetura diferente e um experimento dedicado:
+A MLP original `npc_teste_4_6_4` permanece intacta. Para preparar populações isoladas e seeds fixas para as quatro topologias prioritárias sem usar o Workbench, execute na raiz do clone:
 
-```sql
-CALL sp_nn_create_configurable_architecture(
-    'npc_exp_4_64_32_64_4', JSON_ARRAY(4,64,32,64,4), 'relu'
-);
-CALL sp_nn_create_training_experiment(
-    'larger-net-condition-a', 'npc_exp_4_64_32_64_4', 20261025,
-    8, 0.05, 4, 4, 'mesmo mapa, dificuldade e duração'
-);
+```powershell
+Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
+  & 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe' `
+    --login-path=neural-doom-installer-20261024 `
+    --database=neural_doom_local_game_20261024 --batch --raw
 ```
 
-O segundo comando registra semente/parâmetros e cria uma população reproduzível no MySQL. Configure `NN_ARCHITECTURE_NAME=npc_exp_4_64_32_64_4` em `backend/.env` e reinicie o backend. Sessões desta arquitetura são associadas automaticamente ao experimento. Jogue avaliações suficientes para cada genoma; depois avance somente com `sp_nn_evolve_training_experiment`, que bloqueia a evolução enquanto faltar qualquer avaliação prevista. Cinco gerações totais correspondem à geração 0 mais quatro evoluções. `database/modelagem.md` documenta as consultas de histórico e comparação.
+O script cria, somente se ainda não existirem, experimentos independentes `4→6→4`, `4→32→4`, `4→64→4` e `4→64→32→64→4`, cada um com população inicial de 4, seed fixa, mutação de 5%, duas gerações totais e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria a população nem altera a referência original. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos.
+
+Configure `NN_ARCHITECTURE_NAME` com o nome do experimento no backend de avaliação. As sessões ficam associadas automaticamente ao experimento. A evolução `sp_nn_evolve_training_experiment` recusa avançar enquanto faltar qualquer avaliação prevista. `database/modelagem.md` documenta a preparação, as consultas e as condições de comparação.
 
 O engine envia quatro observações reais. Arquiteturas `12→…` e `16→…` não são habilitadas até que novas entradas sejam instrumentadas e validadas no DOOM. O limite atual é 512 neurônios por camada e 120000 pesos+biases. Mais parâmetros aumentam o custo MySQL e não significam comportamento melhor. Testes de topologia, sementes e evolução usam fixtures e não são evidência de treinamento real.
 

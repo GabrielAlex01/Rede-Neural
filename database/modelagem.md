@@ -150,6 +150,21 @@ ORDER BY e.nome, h.geracao;
 
 As seeds tornam a inicialização e a evolução reprodutíveis; não tornam duas partidas humanas idênticas. Compare mapas, dificuldade, duração e controles. Nenhum dado atual basta para declarar que uma arquitetura ou geração melhorou, e o schema ainda não grava uma linha comparável de `ORIGINAL_AI`. O teste SQL `08_training_experiments.sql` usa eventos sintéticos para verificar somente o bloqueio por número de avaliações e o histórico; não é evidência de aprendizado.
 
+### Populações locais para comparação automatizada
+
+`11_prepare_autonomous_architecture_experiments.sql` seleciona explicitamente `neural_doom_local_game_20261024` e prepara as populações/experimentos para `4→6→4`, `4→32→4`, `4→64→4` e `4→64→32→64→4`. Mantém a população original `npc_teste_4_6_4` intacta. Cada experimento usa população 4, ReLU, mutação 5%, duas gerações totais e duas avaliações reais por genoma. As seeds `2026102501` a `2026102504` são fixas. O procedimento valida topologia, ativação e parâmetros antes de continuar; nomes/configurações conflitantes ou genomas preexistentes sem experimento causam erro em vez de sobrescrita. Reexecutá-lo confere a configuração existente e não duplica população/sessões.
+
+No PowerShell, a partir da raiz do repositório, execute sem Workbench:
+
+```powershell
+Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
+  & 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe' `
+    --login-path=neural-doom-installer-20261024 `
+    --database=neural_doom_local_game_20261024 --batch --raw
+```
+
+Esse script só deve ser executado no schema de jogo isolado indicado. Ele não cria/apaga schemas, não remove dados e não deve ser executado em `neural_doom_local_sql_test_20261024`. A associação de partidas ao experimento e a avaliação são feitas pelas procedures MySQL já instaladas; a evolução só prossegue quando cada genoma da geração tiver duas avaliações persistidas.
+
 Consultas de comparação:
 
 ```sql
