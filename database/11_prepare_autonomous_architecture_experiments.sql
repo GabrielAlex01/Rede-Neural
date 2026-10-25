@@ -139,3 +139,18 @@ CALL sp_nn_prepare_autonomous_experiment_20261025(
     JSON_ARRAY(4, 64, 32, 64, 4), 2026102504,
     'Freedoom2 E1M1 skill 2, 75s, Edge isolado, controles fixos'
 );
+CALL sp_nn_prepare_autonomous_experiment_20261025(
+    'auto_20261025_deep12864128', 'auto_20261025_128_64_128',
+    JSON_ARRAY(4, 128, 64, 128, 4), 2026102505,
+    'Freedoom2 E1M1 skill 2, 75s, Edge isolado, controles fixos'
+);
+CALL sp_nn_prepare_autonomous_experiment_20261025(
+    'auto_20261025_deep25612864', 'auto_20261025_256_128_64',
+    JSON_ARRAY(4, 256, 128, 64, 4), 2026102506,
+    'Freedoom2 E1M1 skill 2, 75s, Edge isolado, controles fixos'
+);
+CALL sp_nn_prepare_autonomous_experiment_20261025(
+    'auto_20261025_h512', 'auto_20261025_512_4_512_4',
+    JSON_ARRAY(4, 512, 4), 2026102507,
+    'Freedoom2 E1M1 skill 2, 75s, Edge isolado, controles fixos'
+);

@@ -110,7 +110,7 @@ Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
     --database=neural_doom_local_game_20261024 --batch --raw
 ```
 
-O script cria, somente se ainda não existirem, experimentos independentes `4→6→4`, `4→32→4`, `4→64→4` e `4→64→32→64→4`, cada um com população inicial de 4, seed fixa, mutação de 5%, duas gerações totais e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria a população nem altera a referência original. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos.
+O script cria, somente se ainda não existirem, experimentos independentes `4→6→4`, `4→32→4`, `4→64→4`, `4→64→32→64→4`, `4→128→64→128→4`, `4→256→128→64→4` e `4→512→4`, cada um com população inicial de 4, seed fixa, mutação de 5%, duas gerações totais e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria a população nem altera a referência original. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos.
 
 Configure `NN_ARCHITECTURE_NAME` com o nome do experimento no backend de avaliação. As sessões ficam associadas automaticamente ao experimento. A evolução `sp_nn_evolve_training_experiment` recusa avançar enquanto faltar qualquer avaliação prevista. `database/modelagem.md` documenta a preparação, as consultas e as condições de comparação.
 

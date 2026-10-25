@@ -152,7 +152,7 @@ As seeds tornam a inicialização e a evolução reprodutíveis; não tornam dua
 
 ### Populações locais para comparação automatizada
 
-`11_prepare_autonomous_architecture_experiments.sql` seleciona explicitamente `neural_doom_local_game_20261024` e prepara as populações/experimentos para `4→6→4`, `4→32→4`, `4→64→4` e `4→64→32→64→4`. Mantém a população original `npc_teste_4_6_4` intacta. Cada experimento usa população 4, ReLU, mutação 5%, duas gerações totais e duas avaliações reais por genoma. As seeds `2026102501` a `2026102504` são fixas. O procedimento valida topologia, ativação e parâmetros antes de continuar; nomes/configurações conflitantes ou genomas preexistentes sem experimento causam erro em vez de sobrescrita. Reexecutá-lo confere a configuração existente e não duplica população/sessões.
+`11_prepare_autonomous_architecture_experiments.sql` seleciona explicitamente `neural_doom_local_game_20261024` e prepara populações/experimentos para `4→6→4`, `4→32→4`, `4→64→4`, `4→64→32→64→4`, `4→128→64→128→4`, `4→256→128→64→4` e `4→512→4`. Mantém a população original `npc_teste_4_6_4` intacta. Cada experimento usa população 4, ReLU, mutação 5%, duas gerações totais e duas avaliações reais por genoma. As seeds `2026102501` a `2026102507` são fixas. O procedimento valida topologia, ativação e parâmetros antes de continuar; nomes/configurações conflitantes ou genomas preexistentes sem experimento causam erro em vez de sobrescrita. Reexecutá-lo confere a configuração existente e não duplica população/sessões.
 
 No PowerShell, a partir da raiz do repositório, execute sem Workbench:
 
