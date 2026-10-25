@@ -1,5 +1,6 @@
 DELIMITER $$
 DROP PROCEDURE IF EXISTS sp_nn_create_initial_population$$
+DROP PROCEDURE IF EXISTS sp_nn_create_seeded_population$$
 
 CREATE PROCEDURE sp_nn_create_initial_population(
     IN p_architecture_name VARCHAR(50),
@@ -123,7 +124,13 @@ BEGIN
         SET v_genome_id = LAST_INSERT_ID();
 
         INSERT INTO nn_genome_weight (genome_id, synapse_id, peso)
-        SELECT v_genome_id, s.id, RAND() * 2.0 - 1.0
+        SELECT v_genome_id, s.id,
+            CASE WHEN @nn_population_seed IS NULL THEN RAND() * 2.0 - 1.0
+            ELSE (CRC32(CONCAT(
+                @nn_population_seed, ':', v_index, ':W:',
+                camada_origem.ordem, ':', origem.posicao, ':',
+                camada_destino.ordem, ':', destino.posicao
+            )) / 4294967295.0) * 2.0 - 1.0 END
         FROM nn_synapse s
         JOIN nn_neuron origem ON origem.id = s.from_neuron_id
         JOIN nn_layer camada_origem ON camada_origem.id = origem.layer_id
@@ -133,7 +140,11 @@ BEGIN
           AND camada_destino.architecture_id = v_architecture_id;
 
         INSERT INTO nn_genome_bias (genome_id, neuron_id, bias)
-        SELECT v_genome_id, n.id, RAND() * 2.0 - 1.0
+        SELECT v_genome_id, n.id,
+            CASE WHEN @nn_population_seed IS NULL THEN RAND() * 2.0 - 1.0
+            ELSE (CRC32(CONCAT(
+                @nn_population_seed, ':', v_index, ':B:', l.ordem, ':', n.posicao
+            )) / 4294967295.0) * 2.0 - 1.0 END
         FROM nn_neuron n
         JOIN nn_layer l ON l.id = n.layer_id
         WHERE l.architecture_id = v_architecture_id
@@ -148,5 +159,26 @@ BEGIN
     FROM nn_genome
     WHERE architecture_id = v_architecture_id AND geracao = 0
     ORDER BY id;
+END$$
+
+CREATE PROCEDURE sp_nn_create_seeded_population(
+    IN p_architecture_name VARCHAR(50),
+    IN p_population_size INT,
+    IN p_seed BIGINT UNSIGNED
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        SET @nn_population_seed = NULL;
+        RESIGNAL;
+    END;
+
+    IF p_seed IS NULL OR p_seed > 4294967295 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A semente deve estar entre 0 e 4294967295';
+    END IF;
+
+    SET @nn_population_seed = p_seed;
+    CALL sp_nn_create_initial_population(p_architecture_name, p_population_size);
+    SET @nn_population_seed = NULL;
 END$$
 DELIMITER ;

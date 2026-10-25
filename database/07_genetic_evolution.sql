@@ -1,4 +1,5 @@
 DROP PROCEDURE IF EXISTS sp_nn_evolve_generation;
+DROP PROCEDURE IF EXISTS sp_nn_evolve_generation_seeded;
 DELIMITER $$
 CREATE PROCEDURE sp_nn_evolve_generation(
     IN p_architecture_name VARCHAR(50),
@@ -14,8 +15,11 @@ BEGIN
     DECLARE v_child_index INT DEFAULT 0;
     DECLARE v_parent1_id INT DEFAULT NULL;
     DECLARE v_parent2_id INT DEFAULT NULL;
+    DECLARE v_parent1_offset INT DEFAULT 0;
+    DECLARE v_parent2_offset INT DEFAULT 0;
     DECLARE v_child_id INT DEFAULT NULL;
     DECLARE v_mutated_genes INT DEFAULT 0;
+    DECLARE v_random_seed BIGINT UNSIGNED DEFAULT NULL;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -28,6 +32,10 @@ BEGIN
        OR p_elite_count IS NULL OR p_mutation_rate IS NULL
        OR p_mutation_rate < 0 OR p_mutation_rate > 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Parâmetros de evolução inválidos';
+    END IF;
+    SET v_random_seed = @nn_evolution_seed;
+    IF v_random_seed > 4294967295 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A semente deve estar entre 0 e 4294967295';
     END IF;
 
     SELECT id INTO v_architecture_id
@@ -87,16 +95,36 @@ BEGIN
     LIMIT p_elite_count;
 
     WHILE v_child_index < v_population_count DO
-        SELECT genome_id INTO v_parent1_id
-        FROM tmp_nn_elite
-        ORDER BY RAND()
-        LIMIT 1;
+        IF v_random_seed IS NULL THEN
+            SELECT genome_id INTO v_parent1_id
+            FROM tmp_nn_elite
+            ORDER BY RAND()
+            LIMIT 1;
 
-        SELECT genome_id INTO v_parent2_id
-        FROM tmp_nn_elite
-        WHERE genome_id <> v_parent1_id
-        ORDER BY RAND()
-        LIMIT 1;
+            SELECT genome_id INTO v_parent2_id
+            FROM tmp_nn_elite
+            WHERE genome_id <> v_parent1_id
+            ORDER BY RAND()
+            LIMIT 1;
+        ELSE
+            SET v_parent1_offset = MOD(CRC32(CONCAT(
+                v_random_seed, ':', p_source_generation, ':', v_child_index, ':P1'
+            )), p_elite_count);
+            SET v_parent2_offset = MOD(CRC32(CONCAT(
+                v_random_seed, ':', p_source_generation, ':', v_child_index, ':P2'
+            )), p_elite_count - 1);
+
+            SELECT genome_id INTO v_parent1_id
+            FROM tmp_nn_elite
+            ORDER BY fitness DESC, genome_id ASC
+            LIMIT v_parent1_offset, 1;
+
+            SELECT genome_id INTO v_parent2_id
+            FROM tmp_nn_elite
+            WHERE genome_id <> v_parent1_id
+            ORDER BY fitness DESC, genome_id ASC
+            LIMIT v_parent2_offset, 1;
+        END IF;
 
         INSERT INTO nn_genome (
             architecture_id, geracao, fitness, origem, pai1_id, pai2_id
@@ -105,31 +133,94 @@ BEGIN
         );
         SET v_child_id = LAST_INSERT_ID();
 
-        INSERT INTO nn_genome_weight (genome_id, synapse_id, peso)
-        SELECT v_child_id, peso1.synapse_id,
-            CASE WHEN RAND() < p_mutation_rate THEN
-                LEAST(1, GREATEST(-1,
-                    (CASE WHEN RAND() < 0.5 THEN peso1.peso ELSE peso2.peso END)
-                    + (RAND() * 2 - 1) * 0.25
-                ))
-            ELSE CASE WHEN RAND() < 0.5 THEN peso1.peso ELSE peso2.peso END
-            END
-        FROM nn_genome_weight peso1
-        JOIN nn_genome_weight peso2 ON peso2.synapse_id = peso1.synapse_id
-        WHERE peso1.genome_id = v_parent1_id AND peso2.genome_id = v_parent2_id;
+        IF v_random_seed IS NULL THEN
+            INSERT INTO nn_genome_weight (genome_id, synapse_id, peso)
+            SELECT v_child_id, peso1.synapse_id,
+                CASE WHEN RAND() < p_mutation_rate THEN
+                    LEAST(1, GREATEST(-1,
+                        (CASE WHEN RAND() < 0.5 THEN peso1.peso ELSE peso2.peso END)
+                        + (RAND() * 2 - 1) * 0.25
+                    ))
+                ELSE CASE WHEN RAND() < 0.5 THEN peso1.peso ELSE peso2.peso END
+                END
+            FROM nn_genome_weight peso1
+            JOIN nn_genome_weight peso2 ON peso2.synapse_id = peso1.synapse_id
+            WHERE peso1.genome_id = v_parent1_id AND peso2.genome_id = v_parent2_id;
 
-        INSERT INTO nn_genome_bias (genome_id, neuron_id, bias)
-        SELECT v_child_id, bias1.neuron_id,
-            CASE WHEN RAND() < p_mutation_rate THEN
-                LEAST(1, GREATEST(-1,
-                    (CASE WHEN RAND() < 0.5 THEN bias1.bias ELSE bias2.bias END)
-                    + (RAND() * 2 - 1) * 0.25
-                ))
-            ELSE CASE WHEN RAND() < 0.5 THEN bias1.bias ELSE bias2.bias END
-            END
-        FROM nn_genome_bias bias1
-        JOIN nn_genome_bias bias2 ON bias2.neuron_id = bias1.neuron_id
-        WHERE bias1.genome_id = v_parent1_id AND bias2.genome_id = v_parent2_id;
+            INSERT INTO nn_genome_bias (genome_id, neuron_id, bias)
+            SELECT v_child_id, bias1.neuron_id,
+                CASE WHEN RAND() < p_mutation_rate THEN
+                    LEAST(1, GREATEST(-1,
+                        (CASE WHEN RAND() < 0.5 THEN bias1.bias ELSE bias2.bias END)
+                        + (RAND() * 2 - 1) * 0.25
+                    ))
+                ELSE CASE WHEN RAND() < 0.5 THEN bias1.bias ELSE bias2.bias END
+                END
+            FROM nn_genome_bias bias1
+            JOIN nn_genome_bias bias2 ON bias2.neuron_id = bias1.neuron_id
+            WHERE bias1.genome_id = v_parent1_id AND bias2.genome_id = v_parent2_id;
+        ELSE
+            INSERT INTO nn_genome_weight (genome_id, synapse_id, peso)
+            SELECT v_child_id, peso1.synapse_id,
+                CASE WHEN (CRC32(CONCAT(
+                    v_random_seed, ':', p_source_generation, ':', v_child_index, ':W:M:',
+                    camada_origem.ordem, ':', origem.posicao, ':',
+                    camada_destino.ordem, ':', destino.posicao
+                )) / 4294967295.0) < p_mutation_rate THEN
+                    LEAST(1, GREATEST(-1,
+                        (CASE WHEN MOD(CRC32(CONCAT(
+                            v_random_seed, ':', p_source_generation, ':', v_child_index, ':W:P:',
+                            camada_origem.ordem, ':', origem.posicao, ':',
+                            camada_destino.ordem, ':', destino.posicao
+                        )), 2) = 0 THEN peso1.peso ELSE peso2.peso END)
+                        + ((CRC32(CONCAT(
+                            v_random_seed, ':', p_source_generation, ':', v_child_index, ':W:D:',
+                            camada_origem.ordem, ':', origem.posicao, ':',
+                            camada_destino.ordem, ':', destino.posicao
+                        )) / 4294967295.0) * 0.5 - 0.25)
+                    ))
+                ELSE CASE WHEN MOD(CRC32(CONCAT(
+                    v_random_seed, ':', p_source_generation, ':', v_child_index, ':W:P:',
+                    camada_origem.ordem, ':', origem.posicao, ':',
+                    camada_destino.ordem, ':', destino.posicao
+                )), 2) = 0 THEN peso1.peso ELSE peso2.peso END
+                END
+            FROM nn_genome_weight peso1
+            JOIN nn_genome_weight peso2 ON peso2.synapse_id = peso1.synapse_id
+            JOIN nn_synapse sinapse ON sinapse.id = peso1.synapse_id
+            JOIN nn_neuron origem ON origem.id = sinapse.from_neuron_id
+            JOIN nn_layer camada_origem ON camada_origem.id = origem.layer_id
+            JOIN nn_neuron destino ON destino.id = sinapse.to_neuron_id
+            JOIN nn_layer camada_destino ON camada_destino.id = destino.layer_id
+            WHERE peso1.genome_id = v_parent1_id AND peso2.genome_id = v_parent2_id;
+
+            INSERT INTO nn_genome_bias (genome_id, neuron_id, bias)
+            SELECT v_child_id, bias1.neuron_id,
+                CASE WHEN (CRC32(CONCAT(
+                    v_random_seed, ':', p_source_generation, ':', v_child_index, ':B:M:',
+                    camada.ordem, ':', neuronio.posicao
+                )) / 4294967295.0) < p_mutation_rate THEN
+                    LEAST(1, GREATEST(-1,
+                        (CASE WHEN MOD(CRC32(CONCAT(
+                            v_random_seed, ':', p_source_generation, ':', v_child_index, ':B:P:',
+                            camada.ordem, ':', neuronio.posicao
+                        )), 2) = 0 THEN bias1.bias ELSE bias2.bias END)
+                        + ((CRC32(CONCAT(
+                            v_random_seed, ':', p_source_generation, ':', v_child_index, ':B:D:',
+                            camada.ordem, ':', neuronio.posicao
+                        )) / 4294967295.0) * 0.5 - 0.25)
+                    ))
+                ELSE CASE WHEN MOD(CRC32(CONCAT(
+                    v_random_seed, ':', p_source_generation, ':', v_child_index, ':B:P:',
+                    camada.ordem, ':', neuronio.posicao
+                )), 2) = 0 THEN bias1.bias ELSE bias2.bias END
+                END
+            FROM nn_genome_bias bias1
+            JOIN nn_genome_bias bias2 ON bias2.neuron_id = bias1.neuron_id
+            JOIN nn_neuron neuronio ON neuronio.id = bias1.neuron_id
+            JOIN nn_layer camada ON camada.id = neuronio.layer_id
+            WHERE bias1.genome_id = v_parent1_id AND bias2.genome_id = v_parent2_id;
+        END IF;
 
         SELECT (
             SELECT COUNT(*)
@@ -176,5 +267,30 @@ BEGIN
     FROM nn_genome
     WHERE architecture_id = v_architecture_id AND geracao = p_source_generation + 1
     ORDER BY id;
+END$$
+
+CREATE PROCEDURE sp_nn_evolve_generation_seeded(
+    IN p_architecture_name VARCHAR(50),
+    IN p_source_generation INT,
+    IN p_elite_count INT,
+    IN p_mutation_rate DOUBLE,
+    IN p_seed BIGINT UNSIGNED
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        SET @nn_evolution_seed = NULL;
+        RESIGNAL;
+    END;
+
+    IF p_seed IS NULL OR p_seed > 4294967295 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A semente deve estar entre 0 e 4294967295';
+    END IF;
+
+    SET @nn_evolution_seed = p_seed;
+    CALL sp_nn_evolve_generation(
+        p_architecture_name, p_source_generation, p_elite_count, p_mutation_rate
+    );
+    SET @nn_evolution_seed = NULL;
 END$$
 DELIMITER ;
