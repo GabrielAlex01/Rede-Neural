@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $requiredEmscriptenVersion = '4.0.14'
 $upstreamCommit = '3e0cd5dc0cd0d5b6788100a2fbc1cdd4ce014b35'
 $sourceRoot = $ChocolateDoomSource
@@ -23,7 +24,11 @@ foreach ($command in @('emcc', 'emcmake', 'cmake', 'ninja', 'git')) {
         throw "Comando não encontrado no PATH: $command"
     }
 }
-$emccVersion = (emcc --version 2>&1 | Select-Object -First 1) -join ''
+$emccVersionOutput = emcc --version 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $emccVersionOutput) {
+    throw 'Não foi possível consultar a versão do Emscripten.'
+}
+$emccVersion = ($emccVersionOutput | Select-Object -First 1) -join ''
 if ($emccVersion -notmatch "\b$([regex]::Escape($requiredEmscriptenVersion))\b") {
     throw "Use Emscripten $requiredEmscriptenVersion para reproduzir este build (detectado: $emccVersion)."
 }
@@ -51,18 +56,32 @@ if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $upstreamCommit) {
     throw "Chocolate Doom precisa estar no commit $upstreamCommit (atual: $actualCommit)."
 }
 
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 git -C $sourceRoot apply --reverse --check -- $patchPath 2>$null
-if ($LASTEXITCODE -ne 0) {
-    git -C $sourceRoot apply --check -- $patchPath
-    if ($LASTEXITCODE -ne 0) { throw 'O patch não se aplica corretamente ao código-fonte.' }
-    git -C $sourceRoot apply -- $patchPath
-    if ($LASTEXITCODE -ne 0) { throw 'Falha ao aplicar o patch do bridge.' }
+$patchAlreadyApplied = $LASTEXITCODE -eq 0
+$ErrorActionPreference = $previousErrorActionPreference
+
+if (-not $patchAlreadyApplied) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    git -C $sourceRoot apply --check -- $patchPath 2>$null
+    $patchCheckExitCode = $LASTEXITCODE
+    if ($patchCheckExitCode -eq 0) {
+        git -C $sourceRoot apply -- $patchPath 2>$null
+        $patchApplyExitCode = $LASTEXITCODE
+    }
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($patchCheckExitCode -ne 0) { throw 'O patch não se aplica corretamente ao código-fonte.' }
+    if ($patchApplyExitCode -ne 0) { throw 'Falha ao aplicar o patch do bridge.' }
 }
 
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 $resolvedWad = (Resolve-Path -LiteralPath $FreedoomWad).Path
 $linkFlags = "-sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=ChocolateDoomModule -sEXPORTED_RUNTIME_METHODS=callMain,FS --preload-file `"$resolvedWad@/iwads/freedoom2.wad`""
 $configureArgs = @(
+    '--fresh',
     '-S', $sourceRoot,
     '-B', $buildRoot,
     '-G', 'Ninja',
