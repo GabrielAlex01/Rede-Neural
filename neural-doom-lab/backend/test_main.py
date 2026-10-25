@@ -38,9 +38,10 @@ ACTION_METRICS = {
 
 
 class StubService:
-    def __init__(self, result=None, error=None, delay_seconds=0):
+    def __init__(self, result=None, error=None, close_error=None, delay_seconds=0):
         self.result = result or {"run_id": 17, "action": "CHASE", "confidence": 0.75}
         self.error = error
+        self.close_error = close_error
         self.delay_seconds = delay_seconds
         self.calls = []
         self.events = []
@@ -59,6 +60,8 @@ class StubService:
         self.events.append((session_id, event))
 
     def close_session(self, session_id):
+        if self.close_error:
+            raise self.close_error
         self.closed_sessions.append(session_id)
 
 
@@ -282,6 +285,18 @@ class WebSocketBridgeTests(unittest.TestCase):
         self.assertTrue(session_response["closed"])
         self.assertEqual(session_response["session_id"], SESSION_ID)
         self.assertEqual(service.closed_sessions, [SESSION_ID])
+
+    def test_session_end_is_not_acknowledged_closed_when_mysql_rejects_it(self):
+        service = StubService(close_error=DecisionError("session missing"))
+        client = TestClient(create_app(service))
+
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({"type": "session_end", "session_id": SESSION_ID})
+            response = websocket.receive_json()
+
+        self.assertFalse(response["closed"])
+        self.assertEqual(response["session_id"], SESSION_ID)
+        self.assertEqual(service.closed_sessions, [])
 
     def test_action_metrics_are_acknowledged_and_returned_with_session_end(self):
         service = StubService()

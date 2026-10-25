@@ -256,15 +256,16 @@ BEGIN
     SELECT COUNT(*) INTO v_session_count
     FROM nn_engine_session WHERE session_id = p_session_id;
 
-    IF v_session_count > 0 THEN
-        SELECT COUNT(*) INTO v_npc_count
-        FROM nn_session_npc WHERE session_id = p_session_id;
-
-        IF v_npc_count > 0 THEN
-            CALL sp_nn_evaluate_session(p_session_id);
-        ELSE
-            CALL sp_nn_close_session(p_session_id);
-        END IF;
+    IF v_session_count = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sessão não encontrada';
     END IF;
+
+    SELECT COUNT(*) INTO v_npc_count
+    FROM nn_session_npc WHERE session_id = p_session_id;
+    IF v_npc_count = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A sessão não possui NPCs avaliáveis';
+    END IF;
+
+    CALL sp_nn_evaluate_session(p_session_id);
 END$$
 DELIMITER ;

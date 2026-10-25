@@ -184,8 +184,9 @@ Com `neural_doom_local_sql_test_20261024` selecionado e confirmado por `SELECT D
 7. `tests/07_reproducible_evolution.sql`
 8. `tests/08_training_experiments.sql`
 9. `tests/09_architecture_benchmark.sql`
+10. `tests/10_finish_session_requires_persisted_evaluation.sql`
 
-Não execute nenhum desses arquivos no schema de jogo. Eles criam e removem procedures auxiliares de teste, ajustam pesos de fixtures e gravam sessões/eventos sintéticos; não removem tabelas ou schemas, mas alteram dados do schema de teste. `02_genome_initialization.sql` cria quatro genomas. `06` e `07` são reexecutáveis com nomes de arquitetura próprios e acrescentam execuções ao schema de teste; `08` cria um experimento fixture único e deve ser executado uma vez em schema de teste; `09` mede desempenho SQL com observações fixas e grava runs de benchmark. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures. Nenhum resultado é dado de partida nem comprova melhora.
+Não execute nenhum desses arquivos no schema de jogo. Eles criam e removem procedures auxiliares de teste, ajustam pesos de fixtures e gravam dados somente no schema de teste. `02_genome_initialization.sql` cria quatro genomas. `06` e `07` são reexecutáveis com nomes de arquitetura próprios e acrescentam execuções; `08` cria um experimento fixture único e deve ser executado uma vez; `09` mede desempenho SQL com observações fixas e grava runs de benchmark. `10` valida que sessões ausentes/vazias não recebem encerramento positivo e conserva um único registro vazio de fixture, inserido com `INSERT IGNORE`. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures. Nenhum resultado é dado de partida nem comprova melhora.
 
 ## Desempenho observado
 
