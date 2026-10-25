@@ -11,7 +11,7 @@ index 6e878a0f1397d9b5db8bda088874e97c67f61253..c8a4eefcc5bb04bb353958e434b3a9dd
              p_pspr.c        p_pspr.h
              p_saveg.c       p_saveg.h
 diff --git a/src/doom/p_enemy.c b/src/doom/p_enemy.c
-index c6acf390e786742228d161e5fdf73ec843116133..1221f0d4855c6c2fafa0e76ccfe1544d5191fef4 100644
+index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c78065382b38c55 100644
 --- a/src/doom/p_enemy.c
 +++ b/src/doom/p_enemy.c
 @@ -26,6 +26,7 @@
@@ -59,7 +59,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..1221f0d4855c6c2fafa0e76ccfe1544d
      
      // do not attack twice in a row
      if (actor->flags & MF_JUSTATTACKED)
-@@ -767,6 +784,52 @@ void A_Chase (mobj_t*	actor)
+@@ -767,6 +784,56 @@ void A_Chase (mobj_t*	actor)
      }
  }
  
@@ -82,6 +82,10 @@ index c6acf390e786742228d161e5fdf73ec843116133..1221f0d4855c6c2fafa0e76ccfe1544d
 +            return true;
 +
 +        case NAI_ACTION_ATTACK:
++            /* Preserve the ORIGINAL_AI one-shot missile cooldown. */
++            if (actor->flags & MF_JUSTATTACKED)
++                return false;
++
 +            if (actor->info->meleestate && P_CheckMeleeRange(actor))
 +            {
 +                if (actor->info->attacksound)
