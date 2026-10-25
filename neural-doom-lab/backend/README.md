@@ -13,9 +13,10 @@ python -m pip install -r backend/requirements-test.txt
 
 Copie `backend/.env.example` para `backend/.env` e configure a conexão do MySQL Server. O backend carrega esse arquivo ao iniciar. Não versione `.env` nem coloque credenciais nos comandos/commits.
 
-O schema configurado precisa conter os scripts de `database/` e uma população inicial. A conta de aplicação pode receber `EXECUTE` somente nestas procedures:
+O schema configurado precisa conter os scripts de `database/` e uma população inicial. A conta de aplicação pode receber `EXECUTE` somente nas procedures necessárias:
 
 - `sp_nn_decide`
+- `sp_nn_decide_for_architecture` (necessária apenas quando `NN_ARCHITECTURE_NAME` seleciona uma arquitetura experimental)
 - `sp_nn_record_combat_event`
 - `sp_nn_finish_session`
 
@@ -34,7 +35,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 O backend encaminha `npc_state` para `sp_nn_decide`, `combat_event` para `sp_nn_record_combat_event` e `session_end` para `sp_nn_finish_session`. Procedures executam fora do event loop; decisões têm limite de 1,5 segundo. Erro de validação/MySQL, timeout ou saída inválida resulta em `INVALID`; o engine mantém `ORIGINAL_AI`.
 
-Cada requisição `npc_state` tem `session_id` UUID e observação de NPC, incluindo `npc_id`, tipo, HP atual/máximo, distância, visibilidade e estado bruto para diagnóstico. O banco registra as quatro entradas normalizadas e todas as ativações. O ID de NPC do engine não é um ID de genoma.
+Cada requisição `npc_state` tem `session_id` UUID e observação de NPC, incluindo `npc_id`, tipo, HP atual/máximo, distância, visibilidade e estado bruto para diagnóstico. Por padrão, o backend continua usando `sp_nn_decide` e a arquitetura `npc_teste_4_6_4`. Para selecionar outra MLP de quatro entradas/quatro saídas, instale `database/05_neural_inference.sql` atualizado e `database/08_configurable_architectures.sql`, crie a arquitetura/população no MySQL e configure `NN_ARCHITECTURE_NAME` em `backend/.env`. O nome é enviado como parâmetro SQL, sem interpolação. O banco registra as quatro entradas normalizadas e todas as ativações. O ID de NPC do engine não é um ID de genoma.
 
 ## Testes
 

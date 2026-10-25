@@ -97,9 +97,13 @@ def validate_observation(session_id: Any, npc: Any) -> tuple[str, NpcObservation
 
 
 class DatabaseDecisionService:
-    def __init__(self, pool: ConnectionPool | None = None):
+    def __init__(self, pool: ConnectionPool | None = None, architecture_name: str | None = None):
         self._pool = pool
         self._pool_lock = threading.Lock()
+        selected_architecture = architecture_name or os.environ.get("NN_ARCHITECTURE_NAME")
+        self._architecture_name = selected_architecture.strip() if selected_architecture else None
+        if self._architecture_name == "":
+            self._architecture_name = None
 
     @classmethod
     def from_environment(cls) -> DatabaseDecisionService:
@@ -149,22 +153,25 @@ class DatabaseDecisionService:
         try:
             connection = self._get_pool().get_connection()
             cursor = connection.cursor()
-            result = cursor.callproc(
-                "sp_nn_decide",
-                (
-                    canonical_session_id,
-                    observation.engine_npc_id,
-                    observation.npc_type,
-                    observation.health,
-                    observation.max_health,
-                    observation.player_distance,
-                    observation.player_visible,
-                    observation.current_state,
-                    0,
-                    "",
-                    0.0,
-                ),
+            parameters = (
+                canonical_session_id,
+                observation.engine_npc_id,
+                observation.npc_type,
+                observation.health,
+                observation.max_health,
+                observation.player_distance,
+                observation.player_visible,
+                observation.current_state,
+                0,
+                "",
+                0.0,
             )
+            if self._architecture_name and self._architecture_name != "npc_teste_4_6_4":
+                procedure = "sp_nn_decide_for_architecture"
+                parameters = (self._architecture_name, *parameters)
+            else:
+                procedure = "sp_nn_decide"
+            result = cursor.callproc(procedure, parameters)
             connection.commit()
         except InvalidRequest:
             raise
@@ -181,7 +188,8 @@ class DatabaseDecisionService:
             if connection is not None:
                 connection.close()
 
-        run_id, action, confidence = result[8], result[9], result[10]
+        output_offset = len(result) - 3
+        run_id, action, confidence = result[output_offset:]
         if action not in VALID_ACTIONS or not isinstance(run_id, int) or confidence is None:
             raise DecisionError("A procedure MySQL retornou uma decisão inválida")
 

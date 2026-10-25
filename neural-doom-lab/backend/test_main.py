@@ -72,7 +72,7 @@ class FakeCursor:
     def callproc(self, procedure, parameters):
         self.procedure = procedure
         self.parameters = parameters
-        return (*parameters[:8], *self.outputs)
+        return (*parameters[:-3], *self.outputs)
 
     def close(self):
         self.closed = True
@@ -133,6 +133,20 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertTrue(connection.committed)
         self.assertTrue(cursor.closed)
         self.assertTrue(connection.closed)
+
+    def test_configured_architecture_is_passed_as_a_sql_parameter(self):
+        cursor = FakeCursor((52, "FLEE", 0.81))
+        service = DatabaseDecisionService(
+            FakePool(FakeConnection(cursor)),
+            architecture_name="npc_teste_4_64_32_64_4",
+        )
+
+        decision = service.decide(SESSION_ID, NPC)
+
+        self.assertEqual(cursor.procedure, "sp_nn_decide_for_architecture")
+        self.assertEqual(cursor.parameters[0], "npc_teste_4_64_32_64_4")
+        self.assertEqual(cursor.parameters[1], SESSION_ID)
+        self.assertEqual(decision, {"run_id": 52, "action": "FLEE", "confidence": 0.81})
 
     def test_invalid_mysql_action_is_rejected(self):
         cursor = FakeCursor((41, "invented", 0.5))

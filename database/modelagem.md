@@ -8,7 +8,7 @@ Os arquivos `00_create_database.sql` e `tests/00_create_test_database.sql` são 
 
 Para este ambiente, use somente `neural_doom_local_game_20261024` e `neural_doom_local_sql_test_20261024`. Antes de instalar, confirme no Workbench que a conexão é o MySQL Server 8.0 na porta 3306, que ambos os nomes existem e que cada schema tem zero tabelas e zero rotinas. Não prossiga se algum nome estiver ausente ou contiver objetos.
 
-Os sete arquivos de instalação abaixo não contêm `USE` nem nomes de schema qualificados; eles operam no schema padrão da aba SQL atual. Para **cada arquivo**, selecione o schema de destino no painel **SCHEMAS** do Workbench e execute `SELECT DATABASE();` na mesma aba. Só execute o arquivo quando o resultado for exatamente o schema esperado. Repita a conferência ao alternar entre jogo e testes.
+Os oito arquivos de instalação abaixo não contêm `USE` nem nomes de schema qualificados; eles operam no schema padrão da aba SQL atual. Para **cada arquivo**, selecione o schema de destino no painel **SCHEMAS** do Workbench e execute `SELECT DATABASE();` na mesma aba. Só execute o arquivo quando o resultado for exatamente o schema esperado. Repita a conferência ao alternar entre jogo e testes.
 
 No schema `neural_doom_local_game_20261024`, execute uma vez, nesta ordem:
 
@@ -19,6 +19,7 @@ No schema `neural_doom_local_game_20261024`, execute uma vez, nesta ordem:
 5. `05_neural_inference.sql`
 6. `06_combat_telemetry.sql`
 7. `07_genetic_evolution.sql`
+8. `08_configurable_architectures.sql`
 
 Crie a população inicial uma vez, por exemplo com 8 indivíduos:
 
@@ -32,7 +33,18 @@ No schema `neural_doom_local_sql_test_20261024`, instale os mesmos sete arquivos
 
 ## Topologia e representação
 
-`nn_architecture` → `nn_layer` → `nn_neuron` → `nn_synapse` define a estrutura. A MLP inicial `npc_teste_4_6_4` tem 4 neurônios de entrada, 6 ocultos (ReLU), 4 de saída (sigmoid), conexões completas entre camadas vizinhas (48 sinapses) e biases nos 10 neurônios não-input.
+`nn_architecture` → `nn_layer` → `nn_neuron` → `nn_synapse` define a estrutura. A MLP de referência `npc_teste_4_6_4` tem 4 neurônios de entrada, 6 ocultos (ReLU), 4 de saída (sigmoid), conexões completas entre camadas vizinhas (48 sinapses) e biases nos 10 neurônios não-input. `sp_nn_create_configurable_architecture(nome, JSON_ARRAY(...), ativação)` monta MLPs densas com 3–8 camadas, até 512 neurônios por camada e até 120000 pesos+biases. No engine atual, a primeira e a última largura precisam ser 4: existem somente quatro entradas reais mapeadas e quatro ações.
+
+Exemplos para o schema de teste (use nomes únicos e crie uma população para cada topologia):
+
+```sql
+CALL sp_nn_create_configurable_architecture('npc_exp_4_32_4', JSON_ARRAY(4,32,4), 'relu');
+CALL sp_nn_create_configurable_architecture('npc_exp_4_64_32_64_4', JSON_ARRAY(4,64,32,64,4), 'relu');
+CALL sp_nn_create_configurable_architecture('npc_exp_4_128_64_128_4', JSON_ARRAY(4,128,64,128,4), 'relu');
+CALL sp_nn_create_initial_population('npc_exp_4_64_32_64_4', 8);
+```
+
+`tests/06_configurable_architectures.sql` cobre também camadas de 256 e 512 neurônios, contagem de pesos/biases e forward pass profundo com pesos conhecidos. Entradas 12/16 ainda não são habilitadas: o jogo só envia `HEALTH_RATIO`, `PLAYER_DISTANCE_RATIO`, `PLAYER_VISIBLE` e `HEALTH_DELTA`. A ampliação depende de instrumentar e validar outras observações reais no engine; não use valores duplicados ou artificiais.
 
 `nn_neuron_io` mapeia as entradas e saídas; o tipo da camada continua em `nn_layer.tipo`.
 
@@ -49,7 +61,7 @@ O estado de um mobj é associado ao seu genoma por `nn_engine_session` e `nn_ses
 
 ## Inferência em SQL
 
-`sp_nn_decide` valida entrada e sessão, associa o NPC a um genoma, normaliza as quatro entradas, calcula cada ativação por expressão `CASE` SQL dentro da procedure, grava `nn_decision_run` e `nn_decision_activation` e devolve a saída de maior valor (`IDLE`, `CHASE`, `ATTACK` ou `FLEE`) e confiança. A expressão inline evita exigir o privilégio global `SUPER` ou alterar `log_bin_trust_function_creators` em servidores MySQL com binary logging habilitado. Cada run representa uma decisão real solicitada pelo engine.
+`sp_nn_decide_for_architecture` valida entrada, sessão e topologia, associa o NPC a um genoma, normaliza as quatro entradas e calcula cada camada oculta em ordem com expressões `CASE` SQL. Registra `nn_decision_run` e `nn_decision_activation` e retorna a ação de maior valor (`IDLE`, `CHASE`, `ATTACK` ou `FLEE`) e confiança. `sp_nn_decide` permanece como wrapper compatível para `npc_teste_4_6_4`. A expressão inline evita exigir o privilégio global `SUPER` ou alterar `log_bin_trust_function_creators` em servidores MySQL com binary logging habilitado. Cada run representa uma decisão solicitada pelo engine; somente a telemetria do engine comprova que ela foi aceita/aplicada.
 
 Ativações, pesos e decisões podem ser consultados por `run_id`:
 

@@ -57,8 +57,10 @@ CREATE TABLE IF NOT EXISTS nn_decision_activation (
 
 DROP FUNCTION IF EXISTS fn_nn_activate;
 DELIMITER $$
+DROP PROCEDURE IF EXISTS sp_nn_decide_for_architecture$$
 DROP PROCEDURE IF EXISTS sp_nn_decide$$
-CREATE PROCEDURE sp_nn_decide(
+CREATE PROCEDURE sp_nn_decide_for_architecture(
+    IN p_architecture_name VARCHAR(50),
     IN p_session_id CHAR(36),
     IN p_engine_npc_id VARCHAR(64),
     IN p_npc_type SMALLINT UNSIGNED,
@@ -91,6 +93,9 @@ BEGIN
     DECLARE v_input_count INT DEFAULT 0;
     DECLARE v_layer_order INT DEFAULT 1;
     DECLARE v_max_layer_order INT DEFAULT 0;
+    DECLARE v_layer_count INT DEFAULT 0;
+    DECLARE v_first_layer_order INT DEFAULT NULL;
+    DECLARE v_invalid_layer_types INT DEFAULT 0;
     DECLARE v_expected_layer_neurons INT DEFAULT 0;
     DECLARE v_inserted_activations INT DEFAULT 0;
     DECLARE v_health_ratio DOUBLE DEFAULT 0;
@@ -104,6 +109,9 @@ BEGIN
         RESIGNAL;
     END;
 
+    IF p_architecture_name IS NULL OR CHAR_LENGTH(TRIM(p_architecture_name)) = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nome da arquitetura inválido';
+    END IF;
     IF p_session_id IS NULL OR IS_UUID(p_session_id) <> 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ID da sessão inválido';
     END IF;
@@ -125,10 +133,10 @@ BEGIN
     SELECT id, n_entradas, n_saidas
     INTO v_architecture_id, v_expected_inputs, v_expected_outputs
     FROM nn_architecture
-    WHERE nome = 'npc_teste_4_6_4';
+    WHERE nome = p_architecture_name;
 
     IF v_architecture_id IS NULL OR v_expected_inputs <> 4 OR v_expected_outputs <> 4 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Arquitetura inicial 4-6-4 ausente ou incompatível';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Arquitetura ausente ou incompatível com as quatro entradas/saídas do engine';
     END IF;
 
     START TRANSACTION;
@@ -210,14 +218,22 @@ BEGIN
         WHERE session_id = p_session_id AND engine_npc_id = p_engine_npc_id;
     END IF;
 
-    SELECT COUNT(*) INTO v_expected_weights
-    FROM nn_synapse s
-    JOIN nn_neuron origem ON origem.id = s.from_neuron_id
-    JOIN nn_layer camada_origem ON camada_origem.id = origem.layer_id
-    JOIN nn_neuron destino ON destino.id = s.to_neuron_id
-    JOIN nn_layer camada_destino ON camada_destino.id = destino.layer_id
-    WHERE camada_origem.architecture_id = v_architecture_id
-      AND camada_destino.architecture_id = v_architecture_id;
+    SELECT COALESCE(SUM(origem.quantidade * destino.quantidade), 0)
+    INTO v_expected_weights
+    FROM (
+        SELECT l.ordem, COUNT(n.id) AS quantidade
+        FROM nn_layer l
+        JOIN nn_neuron n ON n.layer_id = l.id
+        WHERE l.architecture_id = v_architecture_id
+        GROUP BY l.id, l.ordem
+    ) AS origem
+    JOIN (
+        SELECT l.ordem, COUNT(n.id) AS quantidade
+        FROM nn_layer l
+        JOIN nn_neuron n ON n.layer_id = l.id
+        WHERE l.architecture_id = v_architecture_id
+        GROUP BY l.id, l.ordem
+    ) AS destino ON destino.ordem = origem.ordem + 1;
     SELECT COUNT(*) INTO v_actual_weights
     FROM nn_genome_weight w
     JOIN nn_synapse s ON s.id = w.synapse_id
@@ -253,8 +269,24 @@ BEGIN
     FROM nn_layer
     WHERE architecture_id = v_architecture_id;
 
-    IF v_max_layer_order < 2 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A arquitetura não possui camadas ocultas e de saída';
+    SELECT COUNT(*), MIN(ordem)
+    INTO v_layer_count, v_first_layer_order
+    FROM nn_layer
+    WHERE architecture_id = v_architecture_id;
+
+    SELECT COUNT(*) INTO v_invalid_layer_types
+    FROM nn_layer
+    WHERE architecture_id = v_architecture_id
+      AND (
+          (ordem = 0 AND tipo <> 'input')
+          OR (ordem = v_max_layer_order AND tipo <> 'output')
+          OR (ordem > 0 AND ordem < v_max_layer_order AND tipo <> 'hidden')
+      );
+
+    IF v_max_layer_order < 2 OR v_first_layer_order <> 0
+       OR v_layer_count <> v_max_layer_order + 1
+       OR v_invalid_layer_types <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A arquitetura possui camadas ausentes, fora de ordem ou com tipos incompatíveis';
     END IF;
 
     INSERT INTO nn_decision_run (
@@ -364,5 +396,27 @@ BEGIN
     WHERE id = p_run_id;
 
     COMMIT;
+END$$
+
+DROP PROCEDURE IF EXISTS sp_nn_decide$$
+CREATE PROCEDURE sp_nn_decide(
+    IN p_session_id CHAR(36),
+    IN p_engine_npc_id VARCHAR(64),
+    IN p_npc_type SMALLINT UNSIGNED,
+    IN p_health INT,
+    IN p_max_health INT,
+    IN p_player_distance DOUBLE,
+    IN p_player_visible TINYINT,
+    IN p_current_state INT,
+    OUT p_run_id BIGINT,
+    OUT p_action VARCHAR(16),
+    OUT p_confidence DOUBLE
+)
+BEGIN
+    CALL sp_nn_decide_for_architecture(
+        'npc_teste_4_6_4', p_session_id, p_engine_npc_id, p_npc_type,
+        p_health, p_max_health, p_player_distance, p_player_visible,
+        p_current_state, p_run_id, p_action, p_confidence
+    );
 END$$
 DELIMITER ;
