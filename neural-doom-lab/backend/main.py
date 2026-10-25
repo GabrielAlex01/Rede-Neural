@@ -1,10 +1,17 @@
 import asyncio
 import logging
 from pathlib import Path
+from uuid import UUID
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from backend.action_metrics import (
+    InvalidActionMetrics,
+    format_action_metrics,
+    is_monotonic_snapshot,
+    validate_action_metrics,
+)
 from backend.decision_service import (
     DatabaseDecisionService,
     DecisionError,
@@ -18,11 +25,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("neural_doom")
 
 VALID_ACTIONS = {"IDLE", "CHASE", "ATTACK", "FLEE"}
+MAX_TRACKED_METRIC_SESSIONS = 128
 
 
 def create_app(service: DecisionService | None = None) -> FastAPI:
     app = FastAPI(title="Neural Doom Lab MySQL Bridge")
     app.state.decision_service = service or DatabaseDecisionService.from_environment()
+    app.state.action_metrics = {}
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -48,6 +57,30 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                 request_id = message.get("request_id") if isinstance(message, dict) else None
                 npc = message.get("npc") if isinstance(message, dict) else None
                 session_id = message.get("session_id") if isinstance(message, dict) else None
+
+                if message.get("type") == "action_metrics":
+                    try:
+                        canonical_session_id = str(UUID(session_id))
+                        metrics = validate_action_metrics(message.get("metrics"))
+                        previous = app.state.action_metrics.get(canonical_session_id)
+                        if not is_monotonic_snapshot(metrics, previous):
+                            raise InvalidActionMetrics("snapshot desatualizado")
+                        if previous is None and len(app.state.action_metrics) >= MAX_TRACKED_METRIC_SESSIONS:
+                            raise InvalidActionMetrics("limite de sessões de métricas atingido")
+                    except (InvalidActionMetrics, ValueError, TypeError, AttributeError):
+                        await websocket.send_json({
+                            "type": "action_metrics_ack",
+                            "session_id": session_id,
+                            "accepted": False,
+                        })
+                    else:
+                        app.state.action_metrics[canonical_session_id] = metrics
+                        await websocket.send_json({
+                            "type": "action_metrics_ack",
+                            "session_id": canonical_session_id,
+                            "accepted": True,
+                        })
+                    continue
 
                 if message.get("type") == "combat_event":
                     event = message.get("event")
@@ -90,11 +123,25 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         closed = True
                     except (InvalidRequest, DecisionError, asyncio.TimeoutError):
                         closed = False
+                    try:
+                        canonical_session_id = str(UUID(session_id))
+                    except (ValueError, TypeError, AttributeError):
+                        canonical_session_id = None
+                    metrics = app.state.action_metrics.get(canonical_session_id)
                     await websocket.send_json({
                         "type": "session_end_ack",
                         "session_id": session_id,
                         "closed": closed,
+                        "action_metrics": metrics,
                     })
+                    if closed and canonical_session_id is not None:
+                        if metrics is not None:
+                            logger.info(
+                                "Neural action outcomes for session %s: %s",
+                                canonical_session_id,
+                                format_action_metrics(metrics),
+                            )
+                        app.state.action_metrics.pop(canonical_session_id, None)
                     continue
 
                 if (

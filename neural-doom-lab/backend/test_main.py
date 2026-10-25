@@ -1,8 +1,10 @@
+from copy import deepcopy
 import time
 import unittest
 
 from fastapi.testclient import TestClient
 
+from backend.action_metrics import InvalidActionMetrics, is_monotonic_snapshot, validate_action_metrics
 from backend.decision_service import DatabaseDecisionService, DecisionError, validate_observation
 from backend.main import create_app
 
@@ -16,6 +18,22 @@ NPC = {
     "player_distance": 3010,
     "player_visible": True,
     "current_state": 482,
+}
+ACTION_METRICS = {
+    "opportunities": 4,
+    "sql_decisions": 2,
+    "invalid_sql_responses": 0,
+    "sent_to_engine": 3,
+    "applied": 2,
+    "rejected": 1,
+    "fallback": 1,
+    "actions": {
+        "IDLE": {"selected": 0, "sent_to_engine": 0, "applied": 0, "rejected": 0},
+        "CHASE": {"selected": 2, "sent_to_engine": 2, "applied": 2, "rejected": 0},
+        "ATTACK": {"selected": 0, "sent_to_engine": 1, "applied": 0, "rejected": 1},
+        "FLEE": {"selected": 0, "sent_to_engine": 0, "applied": 0, "rejected": 0},
+    },
+    "fallback_reasons": {"backend_offline": 0, "waiting_for_mysql": 1},
 }
 
 
@@ -250,6 +268,65 @@ class WebSocketBridgeTests(unittest.TestCase):
         self.assertTrue(session_response["closed"])
         self.assertEqual(session_response["session_id"], SESSION_ID)
         self.assertEqual(service.closed_sessions, [SESSION_ID])
+
+    def test_action_metrics_are_acknowledged_and_returned_with_session_end(self):
+        service = StubService()
+        app = create_app(service)
+        client = TestClient(app)
+
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "action_metrics",
+                "session_id": SESSION_ID,
+                "metrics": ACTION_METRICS,
+            })
+            metrics_ack = websocket.receive_json()
+            websocket.send_json({"type": "session_end", "session_id": SESSION_ID})
+            end_ack = websocket.receive_json()
+
+        self.assertTrue(metrics_ack["accepted"])
+        self.assertEqual(end_ack["action_metrics"], ACTION_METRICS)
+        self.assertTrue(end_ack["closed"])
+        self.assertNotIn(SESSION_ID, app.state.action_metrics)
+
+    def test_action_metrics_reject_inconsistent_and_stale_snapshots(self):
+        invalid = {**ACTION_METRICS, "applied": 3}
+        with self.assertRaises(InvalidActionMetrics):
+            validate_action_metrics(invalid)
+
+        previous = validate_action_metrics(ACTION_METRICS)
+        older = deepcopy(ACTION_METRICS)
+        older.update({"opportunities": 3, "sql_decisions": 1, "sent_to_engine": 2, "applied": 1})
+        older["actions"]["CHASE"].update({"selected": 1, "sent_to_engine": 1, "applied": 1})
+        older["actions"]["ATTACK"].update({"selected": 0, "sent_to_engine": 1, "rejected": 1})
+        self.assertFalse(is_monotonic_snapshot(validate_action_metrics(older), previous))
+
+        client = TestClient(create_app(StubService()))
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "action_metrics",
+                "session_id": SESSION_ID,
+                "metrics": ACTION_METRICS,
+            })
+            latest_response = websocket.receive_json()
+            websocket.send_json({
+                "type": "action_metrics",
+                "session_id": SESSION_ID,
+                "metrics": older,
+            })
+            stale_response = websocket.receive_json()
+        self.assertTrue(latest_response["accepted"])
+        self.assertFalse(stale_response["accepted"])
+
+        invalid_client = TestClient(create_app(StubService()))
+        with invalid_client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "action_metrics",
+                "session_id": SESSION_ID,
+                "metrics": invalid,
+            })
+            invalid_response = websocket.receive_json()
+        self.assertFalse(invalid_response["accepted"])
 
     def test_malformed_observation_returns_invalid(self):
         service = StubService()
