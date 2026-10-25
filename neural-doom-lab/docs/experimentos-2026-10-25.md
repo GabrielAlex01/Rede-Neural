@@ -67,8 +67,33 @@ As redes 128 e 256 foram interrompidas corretamente: não completaram a segunda 
 - Testes automatizados nesta finalização: backend 16/16; frontend 2/2; build Vite passou; preparação/autenticação MySQL com login-path passou; teste SQL `10_finish_session_requires_persisted_evaluation.sql` passou no schema SQL de testes.
 - Relatórios brutos das partidas ficam fora do Git em `%TEMP%\neural-doom-automated-experiments`: `architecture-experiments-2026-10-25T04-41-55.681Z.json` e `architecture-experiments-2026-10-25T04-54-16.851Z.json` (incluem sessões, decisões, telemetria, latências e ACKs).
 
+## Revisão final das ações — 25/10/2026
+
+Nas 22 partidas do benchmark original, o ACK somou 46.651 oportunidades, 15.088 decisões SQL, 45.448 ofertas ao engine, 30.751 ações aplicadas, 14.697 rejeitadas e 1.203 fallbacks. Não houve resposta SQL inválida nem fallback por backend desconectado; os 1.203 fallbacks foram oportunidades em que a resposta ainda estava pendente. A soma das linhas de decisão no banco foi 15.092, quatro acima dos snapshots ACK em duas partidas antigas (diferenças de 3 e 1, já descritas acima). As duas partidas de revisão abaixo fecharam sem essa diferença.
+
+As rejeições por ação foram:
+
+| Ação | Seleções SQL | Ofertas ao engine | Aplicadas | Rejeitadas |
+|---|---:|---:|---:|---:|
+| IDLE | 4.562 | 13.875 | 13.875 | 0 |
+| CHASE | 1.321 | 4.140 | 4.140 | 0 |
+| ATTACK | 2.078 | 5.727 | 468 | 5.259 |
+| FLEE | 7.127 | 21.706 | 12.268 | 9.438 |
+
+Portanto, `FLEE`, não `ATTACK`, responde pela maior parte das rejeições agregadas: o engine recusou movimento quando `P_Move` não conseguiu avançar (64,2% das 14.697 rejeições). A oferta `ATTACK` foi recusada em 5.259 de 5.727 tentativas (91,8%). Isso é distinto de falha de transporte: a oferta só é contada depois da decisão SQL válida chegar ao engine. No código, melee depende de `P_CheckMeleeRange`; míssil depende de `P_CheckMissileRange`, que pode recusar por linha de visão, tempo de reação, alcance específico do monstro ou pela escolha aleatória original do Chocolate Doom. O bridge recebe apenas um booleano, então não há contagem histórica por submotivo e não é possível repartir as 5.259 recusas entre esses gates. Uma decisão ATTACK também não garante que o projétil acertou.
+
+As métricas contam cada oferta feita por `A_Chase`, não apenas cada resposta SQL: no benchmark original houve cerca de 3,01 ofertas de engine por decisão SQL (2,76 para ATTACK). O frontend atualiza a decisão a cada 250 ms e o engine a consulta nos ticks; isso é retenção da ação entre decisões, não repetição de mensagens SQL. As contagens continuam incluindo todas as ofertas e recusas. Não foi feita deduplicação que pudesse ocultar recusas ou interromper ações contínuas de movimento. A revisão do patch encontrou que o hook neural podia passar antes do bloqueio vanilla `MF_JUSTATTACKED`; a proteção foi adicionada para preservar o cooldown original de míssil. Se esse flag estiver ativo, ATTACK segue como rejeitada e `ORIGINAL_AI` executa o caminho vanilla.
+
+## Revisão final da candidata H64
+
+Foram feitas duas partidas curtas adicionais de integração com `auto_20261025_h64`, geração 1, sem evoluir nem alterar pesos. A primeira durou 31,21 s de controle, teve 11 NPCs, 278 decisões SQL (todas FLEE), 805 ofertas, 505 aplicadas, 300 rejeitadas, 14 fallbacks por resposta pendente, seis eventos `NPC_DAMAGE` (57 de dano) e um `NPC_DEATH`; ACK fechado e 278 decisões persistidas. Round-trip médio 32,32 ms, P95 58,69 ms. A segunda usou o WASM recompilado, durou 23,22 s, teve sete NPCs, 63 decisões SQL (também todas FLEE), 175 ofertas, 131 aplicadas, 44 rejeitadas, sete fallbacks pendentes e três eventos `NPC_DAMAGE` (25 de dano); ACK fechado e 63 decisões persistidas. Round-trip médio 25,47 ms, P95 39,35 ms. Nenhuma dessas partidas selecionou ATTACK.
+
+Somando essas duas verificações às duas partidas longas anteriores da geração 1, os 2.505 resultados SQL dessa candidata foram todos FLEE e nenhum ATTACK. Cada um dos quatro genomas da geração 1 tem agora quatro avaliações reais no banco. A agregação atual é fitness médio 15,8469 / melhor 113,4167, dano ao jogador 236, abates 2, dano recebido 226, três mortes de NPC e 1.443 s de sobrevivência. A média caiu de 40,2750 após as duas avaliações originais; a amostra não é pareada e isso não comprova melhora nem regressão causada pela evolução. O perfil só-FLEE é uma limitação concreta a observar na partida humana, não evidência de combate bem-sucedido.
+
+O build Windows foi executado com Emscripten 4.0.14, Chocolate Doom no commit fixado e Freedoom 2 com o hash documentado. O bundle JS/WASM foi atualizado; o `.data` não mudou. O teste de build também revelou e corrigiu a captura de mensagens nativas no PowerShell e o cache CMake de outra pasta de fontes. As suítes finais passaram: backend 16/16, frontend 2/2 e Vite build. Os testes SQL 01 e 10 passaram no schema de testes. A suíte SQL inteira não pôde ser repetida sem limpar dados: o teste 02 tenta criar novamente a população inicial e parou porque o schema de testes já contém os quatro genomas esperados. O schema não foi resetado; nenhum outro schema foi usado.
+
 ## Recomendação e pendências
 
-`4 → 64 → 4`, geração 1, é a candidata provisória para a validação humana: foi a única com fitness médio positivo na pequena amostra da geração 1 e apresentou menos dano recebido/mortes de NPC e mais dano/abates no agregado, com P95 abaixo de 80 ms. Isso não comprova que a evolução melhorou a rede. `4 → 6 → 4` permanece a referência mais rápida e conservadora; use-a se a prioridade for previsibilidade/latência.
+`4 → 64 → 4`, geração 1, permanece apenas a candidata provisória solicitada para a partida humana. O backend seleciona `auto_20261025_h64`; no estado atual o MySQL atribui a geração 1 e registra o genoma por NPC em `nn_session_npc`. Tecnicamente o jogo recompilado está pronto para abrir e testar, com ACK, decisões SQL, eventos de combate e fallback observados em partidas automatizadas. Não está validado como adversário combativo: nas quatro partidas da geração 1 só escolheu FLEE. Não afirmar que a rede aprendeu ou melhorou.
 
-Ainda falta uma partida humana para validar sensação de perseguição, fuga, frequência e acerto de ataques, controles e responsividade. Também faltam repetições com seed do jogo controlável, avaliação mais longa e latência isolada por procedure MySQL. Até essas etapas, não apresentar a rede como treinada ou vencedora.
+Ainda falta uma partida humana para avaliar perseguição, fuga, ataques, controles e responsividade. O smoke posterior ao rebuild confirmou o jogo e o ACK, mas não exercitou ATTACK; a proteção de cooldown compilou, porém uma aplicação ATTACK válida após essa correção continua pendente de observação em combate. Também faltam repetições controladas com seed do jogo e latência isolada por procedure MySQL.

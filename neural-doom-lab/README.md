@@ -64,8 +64,9 @@ Instale as dependências:
 
 ```powershell
 cd neural-doom-lab
-python -m pip install -r backend/requirements.txt
-python -m pip install -r backend/requirements-test.txt
+if (-not (Test-Path .\.venv\Scripts\python.exe)) { python -m venv .venv }
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements-test.txt
 cd frontend
 npm install
 ```
@@ -75,8 +76,11 @@ Preencha `backend/.env` com a conta de aplicação criada no Workbench. O arquiv
 Terminal 1, na pasta `neural-doom-lab`:
 
 ```powershell
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+$env:NN_ARCHITECTURE_NAME = 'auto_20261025_h64'
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
+
+Esse override seleciona a arquitetura `4 → 64 → 4`. No banco atual, a geração mais recente dela é a 1; a procedure distribui seus quatro genomas pelos NPCs em ordem de fitness e grava a associação por NPC na sessão. O comando não altera o `.env`, os pesos ou outras experiências. Use o Python do `.venv` para que o driver MySQL esteja disponível.
 
 Terminal 2:
 
@@ -96,6 +100,38 @@ Abra a URL local impressa pelo Vite. A verificação HTTP do backend fica em `ht
 5. Se o backend ou o MySQL estiver indisponível, a decisão externa é rejeitada e o NPC permanece na IA original. A resposta precisa chegar dentro do limite de 1,5 s; decisões ausentes/atrasadas usam fallback.
 6. Ao terminar, selecione `ORIGINAL_AI` para encerrar e avaliar a sessão. O fechamento automático ao sair da página é uma tentativa adicional; trocar para `ORIGINAL_AI` com WebSocket conectado é o caminho confiável para aguardar o envio.
 7. O painel **NPC atual → Resumo da sessão** distingue saídas SQL selecionadas, ações entregues ao engine, aplicadas, rejeitadas e oportunidades em que ocorreu fallback. O backend recebe snapshots cumulativos e devolve a contagem no ACK de encerramento; o resumo também é escrito no terminal do backend. `ATTACK` selecionada não significa ataque executado: somente o contador **aplicadas** confirma que o engine aceitou a ação; dano real continua sendo confirmado pelos eventos de combate SQL.
+
+## Conferir a partida no Workbench
+
+Selecione `neural_doom_local_game_20261024` como schema padrão. Esta consulta mostra as sessões H64 mais recentes sem combinar tabelas de decisões e NPCs numa junção multiplicativa:
+
+```sql
+SELECT a.nome, s.session_id, s.criada_em, s.encerrada_em,
+       (SELECT COUNT(*) FROM nn_decision_run r WHERE r.session_id = s.session_id) AS decisoes_sql,
+       (SELECT COUNT(*) FROM nn_session_npc n WHERE n.session_id = s.session_id) AS npcs
+FROM nn_engine_session s
+JOIN nn_architecture a ON a.id = s.architecture_id
+WHERE a.nome = 'auto_20261025_h64'
+ORDER BY s.criada_em DESC
+LIMIT 5;
+```
+
+Copie um `session_id` para consultar as ações escolhidas e a geração/genoma realmente atribuídos. As ações aplicadas/rejeitadas são confirmadas pelo resumo do engine no frontend e no ACK, não pela tabela de decisões SQL:
+
+```sql
+SELECT action, COUNT(*) AS decisoes
+FROM nn_decision_run
+WHERE session_id = 'COLE-O-UUID-DA-SESSAO'
+GROUP BY action;
+
+SELECT n.engine_npc_id, g.id AS genome_id, g.geracao, g.fitness,
+       (SELECT COUNT(*) FROM nn_decision_run r
+        WHERE r.session_id = n.session_id AND r.engine_npc_id = n.engine_npc_id) AS decisoes
+FROM nn_session_npc n
+JOIN nn_genome g ON g.id = n.genome_id
+WHERE n.session_id = 'COLE-O-UUID-DA-SESSAO'
+ORDER BY n.engine_npc_id;
+```
 
 O jogo não garante que todos os genomas da população apareçam em cada mapa. A sessão atribui genomas em ordem por NPC; `nn_generation_summary.completa` indica se a geração inteira tem avaliações. Uma rede aleatória pode agir mal e não deve ser apresentada como já treinada.
 
