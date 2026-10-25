@@ -6,6 +6,7 @@ frontend/node_modules/
 dist/
 frontend/dist/
 engine/build/
+engine/vendor/
 
 # Toolchains e caches
 .emsdk/
