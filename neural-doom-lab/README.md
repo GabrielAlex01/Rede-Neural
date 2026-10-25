@@ -112,6 +112,18 @@ Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
 
 O script cria, somente se ainda não existirem, experimentos independentes `4→6→4`, `4→32→4`, `4→64→4`, `4→64→32→64→4`, `4→128→64→128→4`, `4→256→128→64→4` e `4→512→4`, cada um com população inicial de 4, seed fixa, mutação de 5%, duas gerações totais e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria a população nem altera a referência original. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos.
 
+Com `mysql.exe`, o `login-path` local e as dependências de `frontend` instaladas, o benchmark reproduzível pode ser iniciado sem Workbench:
+
+```powershell
+cd neural-doom-lab/frontend
+npm run test:experiments -- --prepare-only # instala/verifica apenas a preparação; não abre partidas
+npm run test:experiments                 # partidas automatizadas no Edge headless
+```
+
+O runner inicializa Vite se necessário, inicia um FastAPI temporário por arquitetura na porta 8001, e só o encerra se foi criado por ele. O backend principal na porta 8000 não é substituído. Cada partida dura 75 s no E1M1/skill 2, usa controles fixos automatizados e salva JSON/captura fora do repositório em `%TEMP%\neural-doom-automated-experiments`. O script confere arquitetura, ACK, fechamento SQL, igualdade entre decisões do ACK e linhas persistidas, ações aceitas pelo engine e eventos de combate; não evolui genomas após falha de integridade, cobertura incompleta ou P95 WebSocket acima de 800 ms. O seed do Freedoom não é controlável no bundle atual, então os resultados são comparáveis apenas de forma exploratória e não comprovam melhora. Não use `--prepare-only` como teste de jogabilidade.
+
+Os resultados reais obtidos em 25/10/2026, incluindo limitações de amostra e a distinção entre partida automatizada e humana, estão em [`docs/experimentos-2026-10-25.md`](docs/experimentos-2026-10-25.md).
+
 Configure `NN_ARCHITECTURE_NAME` com o nome do experimento no backend de avaliação. As sessões ficam associadas automaticamente ao experimento. A evolução `sp_nn_evolve_training_experiment` recusa avançar enquanto faltar qualquer avaliação prevista. `database/modelagem.md` documenta a preparação, as consultas e as condições de comparação.
 
 O engine envia quatro observações reais. Arquiteturas `12→…` e `16→…` não são habilitadas até que novas entradas sejam instrumentadas e validadas no DOOM. O limite atual é 512 neurônios por camada e 120000 pesos+biases. Mais parâmetros aumentam o custo MySQL e não significam comportamento melhor. Testes de topologia, sementes e evolução usam fixtures e não são evidência de treinamento real.
