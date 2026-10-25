@@ -2,18 +2,15 @@
 -- PROJETO: Rede Neural em Tabelas MySQL para IA de NPCs (estilo Doom)
 -- Modelagem do banco de dados
 
+-- Selecione o schema de destino antes de executar este arquivo.
+-- Para a instalação normal, execute 00_create_database.sql primeiro.
+-- Para testes, selecione npc_neural_game_test e execute os mesmos scripts.
 -- Este schema é dividido em 4 blocos:
 --   1. Estrutura da rede neural (topologia/arquitetura)
 --   2. Genoma (pesos individuais por NPC + evolução)
 --   3. Entidades do jogo (mapa, NPCs, jogador)
 --   4. Execução (forward pass / runs de decisão)
 
- 
-CREATE DATABASE IF NOT EXISTS npc_neural_game
-    CHARACTER SET utf8mb4
-    COLLATE utf8mb4_unicode_ci;
- 
-USE npc_neural_game;
  
 -- BLOCO 1: ESTRUTURA DA REDE NEURAL (topologia)
 -- Define o "formato" do cérebro, sem valores ainda.
@@ -24,7 +21,8 @@ CREATE TABLE nn_architecture (
     nome VARCHAR(50) NOT NULL,          -- ex: 'grunt', 'imp', 'cacodemon'
     n_entradas INT NOT NULL,
     n_saidas INT NOT NULL,
-    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_nn_architecture_nome (nome)
 ) ENGINE=InnoDB;
  
 CREATE TABLE nn_layer (

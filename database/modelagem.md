@@ -1,6 +1,8 @@
 # Modelagem do Banco — Rede Neural em MySQL para IA de NPCs
 
-Schema completo em `schema.sql`, dividido em 4 blocos.
+O schema está dividido em quatro blocos. Execute `00_create_database.sql` para
+a instalação principal e selecione o schema desejado antes de executar os
+demais arquivos. A suíte usa `npc_neural_game_test` e não apaga dados.
 
 ## Bloco 1 — Estrutura da rede (topologia)
 `nn_architecture` → `nn_layer` → `nn_neuron` → `nn_synapse`
@@ -10,14 +12,24 @@ Define o "formato" do cérebro (quantas camadas, quantos neurônios, quais conex
 ## Mapeamento de entradas e saídas
 `nn_neuron` → `nn_neuron_io`
 
-O script `02_io_mapping.sql` cria a tabela `nn_neuron_io`, usada somente para dar significado aos neurônios de entrada e saída. O tipo do neurônio não é repetido nessa tabela, pois já é definido por `nn_layer.tipo`.
+O script `02_io_mapping.sql` cria `nn_neuron_io`. O tipo do neurônio continua
+definido em `nn_layer.tipo`.
 
-Entradas mapeadas:
+Entradas da MLP inicial:
 
-- `HEALTH`
-- `PLAYER_DISTANCE`
-- `PLAYER_VISIBLE`
-- `CURRENT_STATE`
+- `HEALTH_RATIO`: HP atual / HP máximo informado pelo engine, limitada a
+  `[0, 1]` pelo SQL.
+- `PLAYER_DISTANCE_RATIO`: distância em unidades do mapa / 2048, limitada a
+  `[0, 1]` pelo SQL. O bridge usa `P_AproxDistance` e remove o fator fixo do
+  Chocolate Doom antes de enviar o valor.
+- `PLAYER_VISIBLE`: resultado booleano de `P_CheckSight`, convertido para `0`
+  ou `1`.
+- `HEALTH_DELTA`: diferença entre o HP observado agora e na decisão anterior,
+  dividida pelo HP máximo e limitada a `[-1, 1]`. Na primeira observação vale 0.
+
+O campo `current_state` recebido pelo bridge é o índice de `actor->state` em
+`states`. Esse índice identifica um estado interno do engine e não é uma
+grandeza contínua; ele fica disponível para diagnóstico e não é entrada da rede.
 
 Saídas mapeadas:
 
@@ -55,17 +67,25 @@ Cada vez que um NPC precisa decidir uma ação, cria-se um `nn_run`. As ativaç�
 
 ## Fluxo de uma decisão de NPC
 
-1. Jogo cria uma linha em `nn_run`.
-2. Insere valores de entrada (distância do jogador, HP, etc.) como ativações da camada 0.
-3. Stored procedure (a implementar) percorre `nn_layer` em ordem, calculando cada `nn_neuron` a partir de `nn_synapse` + `nn_genome_weight`/`nn_genome_bias` do genoma daquele NPC.
-4. Última camada = decisão (ex: atacar/perseguir/fugir).
-5. Jogo aplica a decisão em `npc_instance`.
-6. Ao fim da partida/vida do NPC, calcula-se `fitness` do genoma para alimentar a próxima geração.
+1. O engine envia estado com sessão, identificador do ator, tipo do NPC, HP,
+   HP máximo, distância, visibilidade e o índice de estado bruto.
+2. O FastAPI valida o contrato e encaminha a chamada ao MySQL.
+3. O SQL associa sessão/NPC/genoma, normaliza as quatro entradas, calcula as
+   ativações da rede e registra o `nn_run`.
+4. O maior valor da camada de saída escolhe `IDLE`, `CHASE`, `ATTACK` ou `FLEE`.
+5. O engine aplica a ação e informa se ela foi aceita; erro ou resposta atrasada
+   mantém a IA original.
+6. Eventos de combate observados no engine alimentam fitness e evolução; uma
+   decisão ou um peso diferente, sozinhos, não comprovam treinamento.
 
-## Pendências (próxima etapa)
+## Instalação e testes
 
-- Genoma inicial com pesos e biases
-- Forward pass e decisão da rede
-- Cálculo de fitness
-- Crossover e mutação
-- Integração da rede com o backend/Doom
+1. Execute `tests/00_create_test_database.sql` para selecionar o banco de teste.
+2. No mesmo schema, execute `schema.sql`, `02_io_mapping.sql` e
+   `03_seed_architecture.sql`.
+3. Execute `tests/01_assert_architecture.sql`. O teste verifica as contagens,
+   as conexões e que `CURRENT_STATE` não está mapeado como entrada.
+
+O seed pode ser executado novamente sem duplicar a arquitetura, camadas,
+neurônios, mapeamentos ou sinapses. A rede usa pesos aleatórios até que exista
+fitness calculado com eventos reais; pesos aleatórios não significam treinamento.

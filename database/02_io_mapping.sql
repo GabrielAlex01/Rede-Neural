@@ -1,7 +1,5 @@
-USE npc_neural_game;
-
 -- O tipo do neurônio continua sendo definido pela camada; aqui fica apenas o significado dele.
-CREATE TABLE nn_neuron_io (
+CREATE TABLE IF NOT EXISTS nn_neuron_io (
     neuron_id INT PRIMARY KEY,
     nome VARCHAR(50) NOT NULL,
     descricao VARCHAR(120) NOT NULL,
