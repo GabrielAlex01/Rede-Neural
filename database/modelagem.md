@@ -6,11 +6,11 @@ O MySQL Server executa a inferência, registra o desempenho e evolui os genomas.
 
 Os arquivos `00_create_database.sql` e `tests/00_create_test_database.sql` são bootstraps de desenvolvimento com nomes fixos (`npc_neural_game` e `npc_neural_game_test`). Eles executam `CREATE DATABASE IF NOT EXISTS` e `USE` para esses nomes; **não os execute** ao instalar nos schemas locais já criados, pois podem selecionar bancos existentes com esses nomes.
 
-Para este ambiente, use somente `neural_doom_local_game_20261024` e `neural_doom_local_sql_test_20261024`. Antes de instalar, confirme no Workbench que a conexão é o MySQL Server 8.0 na porta 3306, que ambos os nomes existem e que cada schema tem zero tabelas e zero rotinas. Não prossiga se algum nome estiver ausente ou contiver objetos.
+Para este ambiente, use somente `neural_doom_local_game_20261024` e `neural_doom_local_sql_test_20261024`. Antes de qualquer instalação, confirme no Workbench que a conexão é o MySQL Server 8.0 na porta 3306, que o schema de destino tem o nome exato e que você está ciente dos objetos já presentes. As instruções de instalação inicial abaixo valem apenas para schemas novos e vazios. Nos schemas locais já instalados, não repita `schema.sql` nem a suíte SQL inteira; use somente as atualizações descritas a seguir.
 
-Os oito arquivos de instalação abaixo não contêm `USE` nem nomes de schema qualificados; eles operam no schema padrão da aba SQL atual. Para **cada arquivo**, selecione o schema de destino no painel **SCHEMAS** do Workbench e execute `SELECT DATABASE();` na mesma aba. Só execute o arquivo quando o resultado for exatamente o schema esperado. Repita a conferência ao alternar entre jogo e testes.
+Os nove arquivos de instalação abaixo não contêm `USE` nem nomes de schema qualificados; eles operam no schema padrão da aba SQL atual. Para **cada arquivo**, selecione o schema de destino no painel **SCHEMAS** do Workbench e execute `SELECT DATABASE();` na mesma aba. Só execute o arquivo quando o resultado for exatamente o schema esperado. Repita a conferência ao alternar entre jogo e testes.
 
-No schema `neural_doom_local_game_20261024`, execute uma vez, nesta ordem:
+Em um schema de jogo novo e vazio, execute uma vez, nesta ordem:
 
 1. `schema.sql`
 2. `02_io_mapping.sql`
@@ -20,6 +20,9 @@ No schema `neural_doom_local_game_20261024`, execute uma vez, nesta ordem:
 6. `06_combat_telemetry.sql`
 7. `07_genetic_evolution.sql`
 8. `08_configurable_architectures.sql`
+9. `09_training_experiments.sql`
+
+Depois de `09_training_experiments.sql`, execute novamente o `05_neural_inference.sql` atualizado. Essa reaplicação substitui apenas as procedures de inferência e não altera os dados das tabelas. No schema de jogo já instalado, sem repetir `schema.sql`, aplique as versões atualizadas de `04_genome_initialization.sql`, `07_genetic_evolution.sql`, `08_configurable_architectures.sql`, `09_training_experiments.sql` e, por último, `05_neural_inference.sql`. Esses arquivos criam/substituem somente as rotinas e tabelas experimentais listadas; não os execute fora dos dois schemas isolados.
 
 Crie a população inicial uma vez, por exemplo com 8 indivíduos:
 
@@ -27,9 +30,9 @@ Crie a população inicial uma vez, por exemplo com 8 indivíduos:
 CALL sp_nn_create_initial_population('npc_teste_4_6_4', 8);
 ```
 
-A procedure exige ao menos dois indivíduos, valida topologia/mapeamentos/conexões, gera pesos e biases aleatórios em `[-1, 1]` e não sobrescreve genomas existentes. Pesos iniciais aleatórios não representam treinamento concluído.
+A procedure exige ao menos dois indivíduos, valida topologia/mapeamentos/conexões, gera pesos e biases em `[-1, 1]` e não sobrescreve genomas existentes. A versão usual usa `RAND()`. Para repetir a população de forma determinística dentro do MySQL, use `sp_nn_create_seeded_population(nome, tamanho, semente)`, com semente inteira entre 0 e 4294967295. A inicialização usa CRC32 de coordenadas estruturais da sinapse/neurônio e do índice do indivíduo; a mesma topologia, ordem de inserção e semente geram os mesmos valores. Isso é uma semente reprodutível, não evidência de treinamento concluído.
 
-No schema `neural_doom_local_sql_test_20261024`, instale os mesmos sete arquivos, na mesma ordem, mas **não crie população manualmente**. A suíte SQL cria os genomas e grava fixtures sintéticas nesse schema.
+Em um schema de teste novo e vazio, instale os mesmos nove arquivos de base na mesma ordem e aplique novamente o `05_neural_inference.sql` atualizado, mas **não crie população manualmente**. A suíte SQL cria os genomas e grava fixtures sintéticas nesse schema. No schema de teste local já preenchido, não reaplique scripts de instalação nem testes não idempotentes; consulte a seção “Testes SQL” para saber quais podem ser repetidos com segurança.
 
 ## Topologia e representação
 
@@ -100,13 +103,52 @@ Esses coeficientes são uma função de pontuação inicial, não uma métrica c
 
 ## Evolução genética
 
-`sp_nn_evolve_generation(nome_arquitetura, geração_origem, elite_count, mutation_rate)` exige ao menos duas elites e avaliação de todos os genomas da geração. Seleciona os melhores por fitness, cruza pesos/biases correspondentes e aplica mutações aleatórias limitadas a `[-1, 1]`; não sobrescreve uma geração filha existente. Exemplo após avaliação completa real da geração 0:
+`sp_nn_evolve_generation(nome_arquitetura, geração_origem, elite_count, mutation_rate)` mantém o comportamento aleatório existente. `sp_nn_evolve_generation_seeded(nome, geração, elite, taxa, semente)` usa CRC32 para seleção de pais, crossover e mutação determinísticos, com semente no intervalo de 0 a 4294967295. Ambas exigem ao menos duas elites e avaliação de todos os genomas da geração, cruzam genes estruturais correspondentes, limitam mutações a `[-1, 1]` e recusam sobrescrever uma geração filha existente. Exemplo após avaliação completa real da geração 0:
 
 ```sql
-CALL sp_nn_evolve_generation('npc_teste_4_6_4', 0, 4, 0.05);
+CALL sp_nn_evolve_generation_seeded('npc_teste_4_6_4', 0, 4, 0.05, 20261025);
 ```
 
 A geração filha só pode ser chamada de melhor depois de jogar partidas com seus próprios genomas e comparar avaliações. O engine usa a geração de número mais alto disponível, portanto não considere filhos recém-criados como treinados antes de avaliá-los.
+
+## Experimentos reprodutíveis
+
+Cada experimento usa uma arquitetura exclusiva, uma população inicial com semente e parâmetros gravados e associa automaticamente as sessões que usam essa arquitetura. Exemplo para cinco gerações totais (0–4), quatro avaliações reais por genoma e uma taxa de mutação de 5%:
+
+```sql
+CALL sp_nn_create_configurable_architecture(
+    'npc_exp_ref_4_6_4', JSON_ARRAY(4,6,4), 'relu'
+);
+CALL sp_nn_create_training_experiment(
+    'ref-condicao-a', 'npc_exp_ref_4_6_4', 20261025,
+    8, 0.05, 4, 4, 'mesmo mapa, duração e configuração de jogo'
+);
+```
+
+Copie o `experiment_id` retornado. Configure `NN_ARCHITECTURE_NAME=npc_exp_ref_4_6_4` em `backend/.env`, reinicie o backend e jogue partidas até cada genoma da geração atual ter o número configurado de avaliações. O engine associa as sessões à arquitetura automaticamente; `sp_nn_finish_session` grava a avaliação a partir de eventos reais. Só então, no Workbench, avance a geração:
+
+```sql
+CALL sp_nn_evolve_training_experiment('<experiment_id>', 0, 4);
+```
+
+O orquestrador recusa a evolução enquanto faltar avaliação de qualquer genoma. A semente de cada geração e os parâmetros ficam em `nn_training_experiment_generation`; resultados ficam em `nn_generation_summary`, `nn_genome_evaluation` e eventos de jogo. A mesma arquitetura não pode pertencer a dois experimentos; crie uma arquitetura com outro nome, ainda que a topologia seja igual, para comparar condições independentes.
+
+Resumo por geração:
+
+```sql
+SELECT e.nome AS experimento, a.nome AS arquitetura,
+       h.geracao, h.seed, h.mutation_rate, h.elite_count,
+       s.tamanho_populacao, s.individuos_avaliados,
+       s.fitness_medio, s.melhor_fitness, s.pior_fitness, s.completa
+FROM nn_training_experiment e
+JOIN nn_architecture a ON a.id = e.architecture_id
+JOIN nn_training_experiment_generation h ON h.experiment_id = e.experiment_id
+LEFT JOIN nn_generation_summary s
+  ON s.architecture_id = a.id AND s.geracao = h.geracao
+ORDER BY e.nome, h.geracao;
+```
+
+As seeds tornam a inicialização e a evolução reprodutíveis; não tornam duas partidas humanas idênticas. Compare mapas, dificuldade, duração e controles. Nenhum dado atual basta para declarar que uma arquitetura ou geração melhorou, e o schema ainda não grava uma linha comparável de `ORIGINAL_AI`. O teste SQL `08_training_experiments.sql` usa eventos sintéticos para verificar somente o bloqueio por número de avaliações e o histórico; não é evidência de aprendizado.
 
 Consultas de comparação:
 
@@ -138,7 +180,27 @@ Com `neural_doom_local_sql_test_20261024` selecionado e confirmado por `SELECT D
 3. `tests/03_neural_inference.sql`
 4. `tests/04_combat_telemetry.sql`
 5. `tests/05_genetic_evolution.sql`
+6. `tests/06_configurable_architectures.sql`
+7. `tests/07_reproducible_evolution.sql`
+8. `tests/08_training_experiments.sql`
+9. `tests/09_architecture_benchmark.sql`
 
-Não execute nenhum desses cinco arquivos no schema de jogo. Eles criam e removem procedures auxiliares de teste, ajustam pesos de fixtures e gravam sessões/eventos sintéticos; não removem tabelas ou schemas, mas alteram os dados do schema de teste. `02_genome_initialization.sql` cria quatro genomas. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures. Nenhum resultado é dado de uma partida real.
+Não execute nenhum desses arquivos no schema de jogo. Eles criam e removem procedures auxiliares de teste, ajustam pesos de fixtures e gravam sessões/eventos sintéticos; não removem tabelas ou schemas, mas alteram dados do schema de teste. `02_genome_initialization.sql` cria quatro genomas. `06` e `07` são reexecutáveis com nomes de arquitetura próprios e acrescentam execuções ao schema de teste; `08` cria um experimento fixture único e deve ser executado uma vez em schema de teste; `09` mede desempenho SQL com observações fixas e grava runs de benchmark. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures. Nenhum resultado é dado de partida nem comprova melhora.
 
-Os scripts de instalação também usam `DROP PROCEDURE/FUNCTION IF EXISTS` para substituir rotinas com os mesmos nomes no schema selecionado. Como os schemas locais foram confirmados vazios, esses comandos não encontram rotinas existentes. Não execute os scripts sobre schemas com dados. Para repetir a suíte, use outro schema de teste vazio já verificado; não apague nem reutilize schemas.
+## Desempenho observado
+
+Medição local em MySQL Server 8.0.46, schema de teste, 20 decisões por topologia e oito IDs de NPC alternados na mesma sessão. O relógio cobre uma chamada completa de `sp_nn_decide_for_architecture` no servidor; não inclui FastAPI, WebSocket, navegador nem combate. Valores em milissegundos, arredondados:
+
+| Topologia | Pesos | Biases | Média SQL | P95 SQL |
+|---|---:|---:|---:|---:|
+| `4→6→4` | 48 | 10 | 9,3 | 17,2 |
+| `4→32→4` | 256 | 36 | 10,1 | 13,7 |
+| `4→64→4` | 512 | 68 | 14,2 | 19,0 |
+| `4→64→32→64→4` | 4.608 | 164 | 53,2 | 60,8 |
+| `4→128→64→128→4` | 17.408 | 324 | 167,9 | 183,0 |
+| `4→256→128→64→4` | 42.240 | 452 | 382,1 | 398,4 |
+| `4→512→4` | 4.096 | 516 | 55,8 | 57,7 |
+
+Um segundo teste em quatro processos `mysql.exe` concorrentes, oito decisões por conexão na rede `4→128→64→128→4`, completou 32 decisões em 2,91 s (11,0 decisões/s). O P95 de 1,67 s é o tempo até uma conexão concluir seus oito pedidos, não latência de uma decisão. Esses números são referência desta máquina e schema, não um limite universal. Não foi medida concorrência pelo caminho FastAPI/WebSocket nem feita uma partida com as redes maiores.
+
+Os scripts de atualização usam `DROP PROCEDURE/FUNCTION IF EXISTS` para substituir rotinas específicas com os mesmos nomes no schema selecionado; isso não remove tabelas nem dados. Ainda assim, rode-os somente em um dos dois schemas isolados após conferir `SELECT DATABASE();`. Não execute a suíte SQL no schema de jogo. Para repetir testes que gravam fixtures, crie outro schema de teste vazio e instale nele a estrutura necessária; não apague nem reutilize schemas com resultados existentes.

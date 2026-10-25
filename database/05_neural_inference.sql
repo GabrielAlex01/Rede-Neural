@@ -160,6 +160,11 @@ BEGIN
         END IF;
     END IF;
 
+    INSERT IGNORE INTO nn_training_experiment_session (experiment_id, session_id)
+    SELECT experiment_id, p_session_id
+    FROM nn_training_experiment
+    WHERE architecture_id = v_architecture_id;
+
     SELECT COUNT(*) INTO v_roster_count
     FROM nn_session_npc
     WHERE session_id = p_session_id AND engine_npc_id = p_engine_npc_id;

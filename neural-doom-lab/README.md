@@ -46,13 +46,15 @@ CREATE DATABASE `neural_doom_local_sql_test_20261024`
     CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-No Workbench, defina `neural_doom_local_game_20261024` como schema padrão e execute uma vez, nesta ordem, os arquivos da raiz do repositório: `database/schema.sql`, `database/02_io_mapping.sql`, `database/03_seed_architecture.sql`, `database/04_genome_initialization.sql`, `database/05_neural_inference.sql`, `database/06_combat_telemetry.sql` e `database/07_genetic_evolution.sql`. Em seguida, crie a população inicial uma única vez, por exemplo:
+No Workbench, defina `neural_doom_local_game_20261024` como schema padrão e execute os arquivos da raiz nesta ordem: `database/schema.sql`, `database/02_io_mapping.sql`, `database/03_seed_architecture.sql`, `database/04_genome_initialization.sql`, `database/05_neural_inference.sql`, `database/06_combat_telemetry.sql`, `database/07_genetic_evolution.sql`, `database/08_configurable_architectures.sql` e `database/09_training_experiments.sql`. Depois de criar as tabelas do experimento, execute novamente o `database/05_neural_inference.sql` atualizado para instalar a associação automática das sessões. Em schema já instalado, não repita `schema.sql`; execute os scripts atualizados `04_genome_initialization.sql`, `07_genetic_evolution.sql`, `08_configurable_architectures.sql`, `09_training_experiments.sql` e, por último, `05_neural_inference.sql`.
+
+Para manter a arquitetura original, crie a população de referência uma única vez, por exemplo:
 
 ```sql
 CALL sp_nn_create_initial_population('npc_teste_4_6_4', 8);
 ```
 
-Para os testes SQL, selecione `neural_doom_local_sql_test_20261024`, instale nele os mesmos sete arquivos, mas **não crie população antes da suíte**. Execute `database/tests/01_assert_architecture.sql`, `02_genome_initialization.sql`, `03_neural_inference.sql`, `04_combat_telemetry.sql` e `05_genetic_evolution.sql`, nessa ordem. Essa suíte grava fixtures e avaliações sintéticas; ela nunca deve rodar no schema de jogo. Para repeti-la, crie e selecione outro schema novo e vazio; não apague nem reutilize schemas existentes.
+Para os testes SQL, use um schema de teste novo e vazio, instale nele os nove scripts de base e reaplique o `05_neural_inference.sql` atualizado; **não crie população antes da suíte**. Execute `database/tests/01_assert_architecture.sql` até `09_architecture_benchmark.sql` em ordem. A suíte grava fixtures e avaliações sintéticas; nunca deve rodar no schema de jogo. No schema de teste local já preenchido, não reaplique testes não idempotentes. Para uma suíte limpa, crie outro schema de teste isolado; não apague nem reutilize schemas existentes. Os testes 06–07 usam arquiteturas próprias, mas também acrescentam dados ao schema selecionado.
 
 Crie uma conta de aplicação local pelo painel **Administration → Users and Privileges** do Workbench, com uma senha escolhida localmente, host `127.0.0.1` e permissão `EXECUTE` somente no schema de jogo acima. Não compartilhe a senha nem coloque-a em comandos, logs ou commits. A conta administrativa usada para instalar e evoluir o banco deve permanecer separada da conta do backend.
 
@@ -68,7 +70,7 @@ cd frontend
 npm install
 ```
 
-Preencha `backend/.env` com a conta de aplicação criada no Workbench. O arquivo local já tem host `127.0.0.1`, porta `3306` e o nome do schema de jogo ilustrativo; informe o usuário e a senha somente no arquivo local, que é ignorado pelo Git. Não copie credenciais do Workbench nem as envie no chat. A conta do backend precisa executar `sp_nn_decide`, `sp_nn_record_combat_event` e `sp_nn_finish_session`.
+Preencha `backend/.env` com a conta de aplicação criada no Workbench. O arquivo local já tem host `127.0.0.1`, porta `3306` e o nome do schema de jogo ilustrativo; informe o usuário e a senha somente no arquivo local, que é ignorado pelo Git. Não copie credenciais do Workbench nem as envie no chat. A conta do backend precisa executar `sp_nn_decide`, `sp_nn_decide_for_architecture`, `sp_nn_record_combat_event` e `sp_nn_finish_session`.
 
 Terminal 1, na pasta `neural-doom-lab`:
 
@@ -96,6 +98,24 @@ Abra a URL local impressa pelo Vite. A verificação HTTP do backend fica em `ht
 7. O painel **NPC atual → Resumo da sessão** distingue saídas SQL selecionadas, ações entregues ao engine, aplicadas, rejeitadas e oportunidades em que ocorreu fallback. O backend recebe snapshots cumulativos e devolve a contagem no ACK de encerramento; o resumo também é escrito no terminal do backend. `ATTACK` selecionada não significa ataque executado: somente o contador **aplicadas** confirma que o engine aceitou a ação; dano real continua sendo confirmado pelos eventos de combate SQL.
 
 O jogo não garante que todos os genomas da população apareçam em cada mapa. A sessão atribui genomas em ordem por NPC; `nn_generation_summary.completa` indica se a geração inteira tem avaliações. Uma rede aleatória pode agir mal e não deve ser apresentada como já treinada.
+
+## Experimentos com redes maiores
+
+A MLP de referência `4→6→4` permanece intacta. No Workbench, crie uma arquitetura diferente e um experimento dedicado:
+
+```sql
+CALL sp_nn_create_configurable_architecture(
+    'npc_exp_4_64_32_64_4', JSON_ARRAY(4,64,32,64,4), 'relu'
+);
+CALL sp_nn_create_training_experiment(
+    'larger-net-condition-a', 'npc_exp_4_64_32_64_4', 20261025,
+    8, 0.05, 4, 4, 'mesmo mapa, dificuldade e duração'
+);
+```
+
+O segundo comando registra semente/parâmetros e cria uma população reproduzível no MySQL. Configure `NN_ARCHITECTURE_NAME=npc_exp_4_64_32_64_4` em `backend/.env` e reinicie o backend. Sessões desta arquitetura são associadas automaticamente ao experimento. Jogue avaliações suficientes para cada genoma; depois avance somente com `sp_nn_evolve_training_experiment`, que bloqueia a evolução enquanto faltar qualquer avaliação prevista. Cinco gerações totais correspondem à geração 0 mais quatro evoluções. `database/modelagem.md` documenta as consultas de histórico e comparação.
+
+O engine envia quatro observações reais. Arquiteturas `12→…` e `16→…` não são habilitadas até que novas entradas sejam instrumentadas e validadas no DOOM. O limite atual é 512 neurônios por camada e 120000 pesos+biases. Mais parâmetros aumentam o custo MySQL e não significam comportamento melhor. Testes de topologia, sementes e evolução usam fixtures e não são evidência de treinamento real.
 
 ## Consultar inferência e combate
 
@@ -164,4 +184,4 @@ O build web gera `frontend/dist/` localmente; não o versione. Para recompilar o
 
 `HEALTH_RATIO`, `PLAYER_DISTANCE_RATIO`, `PLAYER_VISIBLE` e `HEALTH_DELTA` são as quatro entradas. O índice interno do estado do DOOM é guardado para diagnóstico, não tratado como medida contínua. O MySQL executa forward propagation e escolhe a maior saída entre `IDLE`, `CHASE`, `ATTACK` e `FLEE`; o FastAPI apenas valida, chama procedures e devolve a ação. Para os detalhes do schema e das procedures, veja [`../database/modelagem.md`](../database/modelagem.md).
 
-Os genomas começam aleatórios; não existe backpropagation nem aprendizado supervisionado. A evolução usa fitness de eventos reais no SQL. A jogabilidade completa, incluindo movimento, combate, modo multi-NPC e fallback durante uma partida, ainda deve ser confirmada manualmente no ambiente de apresentação.
+Os genomas começam aleatórios; não existe backpropagation nem aprendizado supervisionado. A evolução usa fitness de eventos reais no SQL. A infraestrutura de experimentos está pronta, mas ainda são necessárias partidas humanas repetidas e comparáveis antes de afirmar melhora entre arquiteturas ou gerações. Movimento, combate, modo multi-NPC e fallback também devem ser confirmados manualmente no ambiente de apresentação.
