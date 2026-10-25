@@ -37,7 +37,7 @@ BEGIN
         SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT = 'Evento repetido foi contado mais de uma vez';
     END IF;
 
-    CALL sp_nn_evaluate_session(@test_session_id);
+    CALL sp_nn_finish_session(@test_session_id);
 
     SELECT COUNT(*) INTO v_evaluations
     FROM nn_genome_evaluation WHERE session_id = @test_session_id;
@@ -62,7 +62,7 @@ BEGIN
         SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT = 'Eventos não foram agregados corretamente por genoma';
     END IF;
 
-    CALL sp_nn_evaluate_session(@test_session_id);
+    CALL sp_nn_finish_session(@test_session_id);
     SELECT COUNT(*) INTO v_evaluations
     FROM nn_genome_evaluation WHERE session_id = @test_session_id;
     IF v_evaluations <> 4 THEN

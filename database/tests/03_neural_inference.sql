@@ -87,6 +87,11 @@ BEGIN
     IF v_same_engine_id_sessions <> 2 THEN
         SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT = 'IDs de engine iguais foram confundidos entre sessões';
     END IF;
+    SELECT health_delta INTO v_health_delta
+    FROM nn_decision_run WHERE id = v_run_id;
+    IF v_health_delta <> 0 THEN
+        SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT = 'Nova sessão herdou a variação de vida da sessão anterior';
+    END IF;
 
     CALL sp_nn_decide(
         '11111111-1111-4111-8111-111111111111', 'npc-dois', 2,

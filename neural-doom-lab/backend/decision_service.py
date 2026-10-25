@@ -250,7 +250,7 @@ class DatabaseDecisionService:
         try:
             connection = self._get_pool().get_connection()
             cursor = connection.cursor()
-            cursor.callproc("sp_nn_close_session", (canonical_session_id,))
+            cursor.callproc("sp_nn_finish_session", (canonical_session_id,))
             connection.commit()
         except Exception as exc:
             if connection is not None:

@@ -90,7 +90,11 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         closed = True
                     except (InvalidRequest, DecisionError, asyncio.TimeoutError):
                         closed = False
-                    await websocket.send_json({"type": "session_end_ack", "closed": closed})
+                    await websocket.send_json({
+                        "type": "session_end_ack",
+                        "session_id": session_id,
+                        "closed": closed,
+                    })
                     continue
 
                 if (

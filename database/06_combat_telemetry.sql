@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS nn_generation_summary (
 DROP PROCEDURE IF EXISTS sp_nn_record_combat_event;
 DROP PROCEDURE IF EXISTS sp_nn_close_session;
 DROP PROCEDURE IF EXISTS sp_nn_evaluate_session;
+DROP PROCEDURE IF EXISTS sp_nn_finish_session;
 DELIMITER $$
 CREATE PROCEDURE sp_nn_record_combat_event(
     IN p_event_id CHAR(36),
@@ -241,5 +242,29 @@ BEGIN
         atualizado_em = CURRENT_TIMESTAMP;
 
     COMMIT;
+END$$
+
+CREATE PROCEDURE sp_nn_finish_session(IN p_session_id CHAR(36))
+BEGIN
+    DECLARE v_session_count INT DEFAULT 0;
+    DECLARE v_npc_count INT DEFAULT 0;
+
+    IF p_session_id IS NULL OR IS_UUID(p_session_id) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ID da sessão inválido';
+    END IF;
+
+    SELECT COUNT(*) INTO v_session_count
+    FROM nn_engine_session WHERE session_id = p_session_id;
+
+    IF v_session_count > 0 THEN
+        SELECT COUNT(*) INTO v_npc_count
+        FROM nn_session_npc WHERE session_id = p_session_id;
+
+        IF v_npc_count > 0 THEN
+            CALL sp_nn_evaluate_session(p_session_id);
+        ELSE
+            CALL sp_nn_close_session(p_session_id);
+        END IF;
+    END IF;
 END$$
 DELIMITER ;

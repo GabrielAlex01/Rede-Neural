@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from fastapi.testclient import TestClient
@@ -19,9 +20,10 @@ NPC = {
 
 
 class StubService:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, delay_seconds=0):
         self.result = result or {"run_id": 17, "action": "CHASE", "confidence": 0.75}
         self.error = error
+        self.delay_seconds = delay_seconds
         self.calls = []
         self.events = []
         self.closed_sessions = []
@@ -29,6 +31,8 @@ class StubService:
     def decide(self, session_id, npc):
         validate_observation(session_id, npc)
         self.calls.append((session_id, npc))
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
         if self.error:
             raise self.error
         return self.result
@@ -146,7 +150,7 @@ class DecisionServiceTests(unittest.TestCase):
 
         service.close_session(SESSION_ID)
 
-        self.assertEqual(cursor.procedure, "sp_nn_close_session")
+        self.assertEqual(cursor.procedure, "sp_nn_finish_session")
         self.assertEqual(cursor.parameters[0], SESSION_ID)
         self.assertTrue(connection.committed)
 
@@ -185,6 +189,25 @@ class WebSocketBridgeTests(unittest.TestCase):
 
         self.assertEqual(response["action"], "INVALID")
         self.assertEqual(response["reason"], "mysql_unavailable")
+
+    def test_slow_mysql_decision_returns_invalid_at_deadline(self):
+        client = TestClient(create_app(StubService(delay_seconds=2.0)))
+
+        started_at = time.perf_counter()
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "npc_state",
+                "request_id": "req-slow",
+                "session_id": SESSION_ID,
+                "npc": NPC,
+            })
+            response = websocket.receive_json()
+            response_elapsed = time.perf_counter() - started_at
+
+        self.assertEqual(response["action"], "INVALID")
+        self.assertEqual(response["reason"], "mysql_unavailable")
+        self.assertGreaterEqual(response_elapsed, 1.4)
+        self.assertLess(response_elapsed, 1.9)
 
     def test_invalid_service_result_returns_invalid(self):
         invalid_result = {"run_id": 17, "action": ["ATTACK"], "confidence": 0.75}
@@ -225,6 +248,7 @@ class WebSocketBridgeTests(unittest.TestCase):
         self.assertTrue(event_response["stored"])
         self.assertEqual(service.events, [(SESSION_ID, event)])
         self.assertTrue(session_response["closed"])
+        self.assertEqual(session_response["session_id"], SESSION_ID)
         self.assertEqual(service.closed_sessions, [SESSION_ID])
 
     def test_malformed_observation_returns_invalid(self):

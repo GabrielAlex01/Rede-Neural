@@ -423,19 +423,50 @@ function disconnectAiBackend(status = 'Disconnected') {
   setBackendStatus(status);
 }
 
-function finishAiSession() {
-  if (state.sessionId && aiBridgeState.socket?.readyState === WebSocket.OPEN) {
-    flushTelemetryQueue();
-    aiBridgeState.socket.send(JSON.stringify({
-      type: 'session_end',
-      session_id: state.sessionId,
-    }));
+async function finishAiSession() {
+  const sessionId = state.sessionId;
+  const socket = aiBridgeState.socket;
+  let closed = false;
+
+  if (sessionId) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      closed = await new Promise((resolve) => {
+        const timeout = window.setTimeout(() => finish(false), 2500);
+        const onMessage = (event) => {
+          try {
+            const response = JSON.parse(event.data);
+            if (response.type === 'session_end_ack' && response.session_id === sessionId) {
+              finish(response.closed === true);
+            }
+          } catch {
+            // The ordinary WebSocket handler logs malformed payloads.
+          }
+        };
+
+        function finish(result) {
+          window.clearTimeout(timeout);
+          socket.removeEventListener('message', onMessage);
+          resolve(result);
+        }
+
+        socket.addEventListener('message', onMessage);
+        flushTelemetryQueue();
+        socket.send(JSON.stringify({ type: 'session_end', session_id: sessionId }));
+      });
+    }
+
+    if (!closed) {
+      appendLog('error', '[AI BRIDGE] sessão não confirmou encerramento no MySQL; confira a conexão antes de treinar.');
+    }
   }
 
-  state.sessionId = null;
+  if (state.sessionId === sessionId) {
+    state.sessionId = null;
+  }
   state.telemetryQueue = [];
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
+  return closed;
 }
 
 function requestBackendDecision(npcState) {
@@ -544,18 +575,26 @@ function syncAiMode({ log = true } = {}) {
   aiProvider.disabled = !isExternal;
 
   if (!isExternal) {
-    finishAiSession();
-    disconnectAiBackend('Inativo — selecione EXTERNAL_AI');
+    aiMode.disabled = true;
+    state.engine?._DB_SetAIMode?.(modeValue);
     renderAiState(null, 'Original engine');
+    void finishAiSession().finally(() => {
+      if (aiMode.value === 'original') {
+        disconnectAiBackend('Inativo — selecione EXTERNAL_AI');
+      }
+      aiMode.disabled = false;
+    });
   } else if (aiProvider.value === 'backend') {
+    aiMode.disabled = false;
     state.sessionId ||= globalThis.crypto.randomUUID();
     connectAiBackend();
   } else {
+    aiMode.disabled = false;
     disconnectAiBackend();
     setBackendStatus('Local mock selected');
   }
 
-  if (state.engine?._DB_SetAIMode) {
+  if (isExternal && state.engine?._DB_SetAIMode) {
     state.engine._DB_SetAIMode(modeValue);
   }
 
@@ -860,10 +899,15 @@ wadInput.addEventListener('change', async (event) => {
 aiMode.addEventListener('change', () => syncAiMode());
 aiProvider.addEventListener('change', () => {
   if (aiProvider.value === 'backend') {
+    if (aiMode.value === 'external') {
+      state.sessionId ||= globalThis.crypto.randomUUID();
+    }
     connectAiBackend();
   } else {
-    disconnectAiBackend();
-    setBackendStatus('Local mock selected');
+    void finishAiSession().finally(() => {
+      disconnectAiBackend();
+      setBackendStatus('Local mock selected');
+    });
   }
   appendLog('info', `[AI BRIDGE] decision source set to ${aiProvider.value}.`);
 });
