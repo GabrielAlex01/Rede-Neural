@@ -270,7 +270,7 @@ const aiBridgeState = {
   decisions: new Map(),
   inflight: new Map(),
   lastFallbackLogAt: 0,
-  lastRequestAtByNpc: new Map(),
+  lastRequestAt: 0,
   lastResultLogAt: 0,
   metrics: createAiMetrics(),
   metricsTimer: null,
@@ -470,7 +470,6 @@ function connectAiBackend() {
     aiBridgeState.socket = null;
     aiBridgeState.decisions.clear();
     aiBridgeState.inflight.clear();
-    aiBridgeState.lastRequestAtByNpc.clear();
     setBackendStatus('Disconnected — fallback active');
     scheduleBackendReconnect();
   });
@@ -492,7 +491,6 @@ function disconnectAiBackend(status = 'Disconnected') {
   aiBridgeState.socket = null;
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
-  aiBridgeState.lastRequestAtByNpc.clear();
   setBackendStatus(status);
 }
 
@@ -541,28 +539,18 @@ async function finishAiSession() {
   state.telemetryQueue = [];
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
-  aiBridgeState.lastRequestAtByNpc.clear();
   return closed;
 }
 
 function requestBackendDecision(npcState) {
   const now = Date.now();
-  const npcId = String(npcState.npc_id);
-  const lastRequestAt = aiBridgeState.lastRequestAtByNpc.get(npcId) ?? 0;
-  const hasInflightRequest = [...aiBridgeState.inflight.values()].some(
-    (request) => String(request.npcState.npc_id) === npcId,
-  );
 
-  if (
-    now - lastRequestAt < 250
-    || hasInflightRequest
-    || aiBridgeState.socket?.readyState !== WebSocket.OPEN
-  ) {
+  if (now - aiBridgeState.lastRequestAt < 250 || aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
     return;
   }
 
   const requestId = `${npcState.npc_id}-${now}-${++aiBridgeState.requestSequence}`;
-  aiBridgeState.lastRequestAtByNpc.set(npcId, now);
+  aiBridgeState.lastRequestAt = now;
   aiBridgeState.inflight.set(requestId, { npcState, sentAt: now, sessionId: state.sessionId });
   aiBridgeState.socket.send(JSON.stringify({
     type: 'npc_state',
@@ -918,7 +906,7 @@ async function launchEngine() {
   stopAiMetricsSync();
   aiBridgeState.metrics = createAiMetrics();
   aiBridgeState.pending.clear();
-  aiBridgeState.lastRequestAtByNpc.clear();
+  aiBridgeState.lastRequestAt = 0;
   updateAiMetricsDisplay();
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
