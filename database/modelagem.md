@@ -1,91 +1,116 @@
-# Modelagem do Banco — Rede Neural em MySQL para IA de NPCs
+# Modelagem da rede neural no MySQL
 
-O schema está dividido em quatro blocos. Execute `00_create_database.sql` para
-a instalação principal e selecione o schema desejado antes de executar os
-demais arquivos. A suíte usa `npc_neural_game_test` e não apaga dados.
+O MySQL Server executa a inferência, registra o desempenho e evolui os genomas. MySQL Workbench é o cliente usado para instalar, consultar e administrar o schema; FastAPI não implementa a lógica neural nem o treinamento.
 
-## Bloco 1 — Estrutura da rede (topologia)
-`nn_architecture` → `nn_layer` → `nn_neuron` → `nn_synapse`
+## Instalação
 
-Define o "formato" do cérebro (quantas camadas, quantos neurônios, quais conexões existem), sem nenhum peso ainda. É compartilhado entre todos os NPCs do mesmo tipo.
+Na conexão local do Workbench, execute `00_create_database.sql`, selecione `npc_neural_game` e rode uma vez, nesta ordem:
 
-## Mapeamento de entradas e saídas
-`nn_neuron` → `nn_neuron_io`
+1. `schema.sql`
+2. `02_io_mapping.sql`
+3. `03_seed_architecture.sql`
+4. `04_genome_initialization.sql`
+5. `05_neural_inference.sql`
+6. `06_combat_telemetry.sql`
+7. `07_genetic_evolution.sql`
 
-O script `02_io_mapping.sql` cria `nn_neuron_io`. O tipo do neurônio continua
-definido em `nn_layer.tipo`.
+Crie a população inicial uma vez, por exemplo com 8 indivíduos:
 
-Entradas da MLP inicial:
+```sql
+CALL sp_nn_create_initial_population('npc_teste_4_6_4', 8);
+```
 
-- `HEALTH_RATIO`: HP atual / HP máximo informado pelo engine, limitada a
-  `[0, 1]` pelo SQL.
-- `PLAYER_DISTANCE_RATIO`: distância em unidades do mapa / 2048, limitada a
-  `[0, 1]` pelo SQL. O bridge usa `P_AproxDistance` e remove o fator fixo do
-  Chocolate Doom antes de enviar o valor.
-- `PLAYER_VISIBLE`: resultado booleano de `P_CheckSight`, convertido para `0`
-  ou `1`.
-- `HEALTH_DELTA`: diferença entre o HP observado agora e na decisão anterior,
-  dividida pelo HP máximo e limitada a `[-1, 1]`. Na primeira observação vale 0.
+A procedure exige ao menos dois indivíduos, valida topologia/mapeamentos/conexões, gera pesos e biases aleatórios em `[-1, 1]` e não sobrescreve genomas existentes. Pesos iniciais aleatórios não representam treinamento concluído.
 
-O campo `current_state` recebido pelo bridge é o índice de `actor->state` em
-`states`. Esse índice identifica um estado interno do engine e não é uma
-grandeza contínua; ele fica disponível para diagnóstico e não é entrada da rede.
+## Topologia e representação
 
-Saídas mapeadas:
+`nn_architecture` → `nn_layer` → `nn_neuron` → `nn_synapse` define a estrutura. A MLP inicial `npc_teste_4_6_4` tem 4 neurônios de entrada, 6 ocultos (ReLU), 4 de saída (sigmoid), conexões completas entre camadas vizinhas (48 sinapses) e biases nos 10 neurônios não-input.
 
-- `IDLE`
-- `CHASE`
-- `ATTACK`
-- `FLEE`
+`nn_neuron_io` mapeia as entradas e saídas; o tipo da camada continua em `nn_layer.tipo`.
 
-## Arquitetura inicial de teste
+Entradas calculadas no SQL:
 
-O script `03_seed_architecture.sql` cria a arquitetura `npc_teste_4_6_4`, organizada em:
+- `HEALTH_RATIO`: HP atual / HP máximo informado pelo engine, limitada a `[0, 1]`.
+- `PLAYER_DISTANCE_RATIO`: distância aproximada em unidades do mapa / 2048, limitada a `[0, 1]`. O bridge converte `P_AproxDistance` de fixed-point.
+- `PLAYER_VISIBLE`: resultado de `P_CheckSight`, representado como `0` ou `1`.
+- `HEALTH_DELTA`: `(HP observado na decisão anterior - HP atual) / HP máximo`, limitada a `[-1, 1]`. Na primeira decisão daquele NPC naquela sessão, vale `0`.
 
-- 4 neurônios de entrada
-- 6 neurônios ocultos com ReLU
-- 4 neurônios de saída com sigmoid
+`current_state` é o índice interno de `actor->state` em `states`. Ele não é contínuo e serve apenas para diagnóstico; não participa do forward pass. `HEALTH_DELTA` usa HP real observado, não estado simulado: cada nova decisão compara o HP atual com o último valor persistido em `nn_session_npc.last_health`. Dano ocorrido entre duas decisões é agregado nessa diferença. Um NPC morto não recebe novas decisões; o engine comunica `NPC_DEATH` uma vez. Cada partida recebe novo UUID de sessão e cada ator spawnado tem ID monotônico novo; assim a primeira amostra começa com delta zero e não herda o HP da partida anterior. Um reinício da página cria outro engine e sessão.
 
-As conexões são criadas somente entre camadas vizinhas e de forma completa, resultando em 48 sinapses. A camada de entrada apenas recebe os valores; a função de ativação armazenada nela não deve fazer parte do processamento futuro.
+O estado de um mobj é associado ao seu genoma por `nn_engine_session` e `nn_session_npc`, usando `(session_id, engine_npc_id)` como chave. O ID do engine não é o ID MySQL do genoma. Uma sessão percorre a geração mais recente em ordem de fitness/ID e distribui os genomas pelos NPCs; se surgirem mais NPCs que indivíduos, a seleção dá a volta na população.
 
-Os scripts de mapeamento e arquitetura foram mantidos separados de `schema.sql`.
+## Inferência em SQL
 
-## Bloco 2 — Genoma (pesos individuais)
-`nn_genome` → `nn_genome_weight` / `nn_genome_bias`
+`sp_nn_decide` valida entrada e sessão, associa o NPC a um genoma, normaliza as quatro entradas, calcula cada ativação com `fn_nn_activate`, grava `nn_decision_run` e `nn_decision_activation` e devolve a saída de maior valor (`IDLE`, `CHASE`, `ATTACK` ou `FLEE`) e confiança. Cada run representa uma decisão real solicitada pelo engine.
 
-Cada NPC tem seu próprio conjunto de pesos e bias rodando sobre a mesma topologia do Bloco 1. `nn_genome` guarda também `fitness`, `geracao` e os pais (`pai1_id`/`pai2_id`), para permitir evolução genética (crossover/mutação) em vez de backpropagation — que é inviável em SQL puro.
+Ativações, pesos e decisões podem ser consultados por `run_id`:
 
-## Bloco 3 — Entidades do jogo
-`game_level`, `level_wall`, `npc_type`, `npc_instance`, `player_state`
+```sql
+SELECT r.id, r.session_id, r.engine_npc_id, r.genome_id, r.action,
+       r.confidence, a.neuron_id, a.valor
+FROM nn_decision_run r
+JOIN nn_decision_activation a ON a.run_id = r.id
+ORDER BY r.id DESC, a.neuron_id;
+```
 
-`npc_instance` é a ponte entre o mundo do jogo e a rede neural: cada instância aponta para um `genome_id` específico.
+## Engine, eventos e avaliação
 
-## Bloco 4 — Execução (forward pass)
-`nn_run` → `nn_run_activation`
+O bridge C reproduzível está em `neural-doom-lab/engine/neural-ai-bridge.patch`, sobre o commit fixo de Chocolate Doom documentado em `neural-doom-lab/engine/README.md`. O código compilado chama o cliente WebSocket JavaScript, que encaminha observações ao FastAPI; o backend só valida e chama procedures MySQL. O engine só marca um NPC como controlado pela rede depois de aplicar uma ação externa válida. Se decisão atrasar, for inválida ou o serviço falhar, ele executa a IA original.
 
-Cada vez que um NPC precisa decidir uma ação, cria-se um `nn_run`. As ativações de cada neurônio (entrada, ocultas e saída) daquela decisão específica ficam em `nn_run_activation`.
+`p_inter.c` envia os eventos observados pelo engine:
 
-## Fluxo de uma decisão de NPC
+- `PLAYER_DAMAGE`: dano aplicado ao jogador por NPC controlado pela rede.
+- `PLAYER_KILL`: NPC controlado pela rede elimina o jogador.
+- `NPC_DAMAGE`: dano efetivo recebido pelo NPC controlado.
+- `NPC_DEATH`: morte do NPC controlado.
 
-1. O engine envia estado com sessão, identificador do ator, tipo do NPC, HP,
-   HP máximo, distância, visibilidade e o índice de estado bruto.
-2. O FastAPI valida o contrato e encaminha a chamada ao MySQL.
-3. O SQL associa sessão/NPC/genoma, normaliza as quatro entradas, calcula as
-   ativações da rede e registra o `nn_run`.
-4. O maior valor da camada de saída escolhe `IDLE`, `CHASE`, `ATTACK` ou `FLEE`.
-5. O engine aplica a ação e informa se ela foi aceita; erro ou resposta atrasada
-   mantém a IA original.
-6. Eventos de combate observados no engine alimentam fitness e evolução; uma
-   decisão ou um peso diferente, sozinhos, não comprovam treinamento.
+Eventos usam UUID idempotente, sessão e ID do NPC. O schema registra-os em `nn_combat_event`. `sp_nn_finish_session` fecha e avalia a sessão quando há NPCs registrados; sem NPC, apenas fecha. Cada combinação de sessão/genoma gera uma linha única em `nn_genome_evaluation`. Sobrevivência é calculada desde o registro do NPC até sua morte ou o fim da sessão.
 
-## Instalação e testes
+Fitness atual:
 
-1. Execute `tests/00_create_test_database.sql` para selecionar o banco de teste.
-2. No mesmo schema, execute `schema.sql`, `02_io_mapping.sql` e
-   `03_seed_architecture.sql`.
-3. Execute `tests/01_assert_architecture.sql`. O teste verifica as contagens,
-   as conexões e que `CURRENT_STATE` não está mapeado como entrada.
+```text
+dano ao jogador + 100 × eliminações do jogador
+- 0,25 × dano recebido - 50 × mortes do NPC
++ segundos de sobrevivência / 60
+```
 
-O seed pode ser executado novamente sem duplicar a arquitetura, camadas,
-neurônios, mapeamentos ou sinapses. A rede usa pesos aleatórios até que exista
-fitness calculado com eventos reais; pesos aleatórios não significam treinamento.
+Esses coeficientes são uma função de pontuação inicial, não uma métrica científica calibrada. Uma avaliação só comprova os eventos efetivamente observados; desconexões podem deixar eventos sem persistência. Scripts de teste usam eventos sintéticos identificados como fixtures e não devem ser usados para alegar aprendizado.
+
+`nn_generation_summary` mantém população, contagem avaliada e fitness médio/melhor/pior. Uma geração é completa se todos os genomas receberam pelo menos uma avaliação. Como cada sessão avalia apenas genomas atribuídos a NPCs que apareceram, repita sessões até a geração ficar completa.
+
+## Evolução genética
+
+`sp_nn_evolve_generation(nome_arquitetura, geração_origem, elite_count, mutation_rate)` exige ao menos duas elites e avaliação de todos os genomas da geração. Seleciona os melhores por fitness, cruza pesos/biases correspondentes e aplica mutações aleatórias limitadas a `[-1, 1]`; não sobrescreve uma geração filha existente. Exemplo após avaliação completa real da geração 0:
+
+```sql
+CALL sp_nn_evolve_generation('npc_teste_4_6_4', 0, 4, 0.05);
+```
+
+A geração filha só pode ser chamada de melhor depois de jogar partidas com seus próprios genomas e comparar avaliações. O engine usa a geração de número mais alto disponível, portanto não considere filhos recém-criados como treinados antes de avaliá-los.
+
+Consultas de comparação:
+
+```sql
+SELECT n.nome, s.geracao, s.tamanho_populacao, s.individuos_avaliados,
+       s.fitness_medio, s.melhor_fitness, s.pior_fitness, s.completa
+FROM nn_generation_summary s
+JOIN nn_architecture n ON n.id = s.architecture_id
+WHERE n.nome = 'npc_teste_4_6_4'
+ORDER BY s.geracao;
+
+SELECT g.geracao, g.id AS genome_id, g.pai1_id, g.pai2_id,
+       g.origem, g.fitness, COUNT(e.id) AS avaliacoes
+FROM nn_genome g
+LEFT JOIN nn_genome_evaluation e ON e.genome_id = g.id
+WHERE g.architecture_id = (
+    SELECT id FROM nn_architecture WHERE nome = 'npc_teste_4_6_4'
+)
+GROUP BY g.geracao, g.id, g.pai1_id, g.pai2_id, g.origem, g.fitness
+ORDER BY g.geracao, g.fitness DESC, g.id;
+```
+
+## Testes reproduzíveis
+
+Os testes SQL devem rodar somente em schema vazio separado do banco de jogo. Em Workbench, execute `tests/00_create_test_database.sql`; selecione `npc_neural_game_test`; instale `schema.sql`, `02_io_mapping.sql`, `03_seed_architecture.sql`, `04_genome_initialization.sql`, `05_neural_inference.sql`, `06_combat_telemetry.sql` e `07_genetic_evolution.sql`; rode `tests/01_assert_architecture.sql` até `tests/05_genetic_evolution.sql` em ordem. `02_genome_initialization.sql` cria quatro genomas para os testes. Os testes de inferência fixam pesos conhecidos; telemetria/evolução usam fixtures em banco de teste. Nenhum desses resultados é dado de uma partida.
+
+Para reexecutar, escolha um novo schema vazio de teste ou remova somente o schema de teste que você criou após conferir o nome; os scripts não apagam schemas automaticamente. A suíte não deve ser executada no schema `npc_neural_game`.
