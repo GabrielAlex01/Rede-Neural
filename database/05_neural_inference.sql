@@ -88,6 +88,9 @@ BEGIN
     DECLARE v_generation INT DEFAULT NULL;
     DECLARE v_genome_id INT DEFAULT NULL;
     DECLARE v_genome_offset INT DEFAULT 0;
+    DECLARE v_v2_experiment_count INT DEFAULT 0;
+    DECLARE v_v2_experiment_id CHAR(36) DEFAULT NULL;
+    DECLARE v_v2_generation_count INT DEFAULT 0;
     DECLARE v_previous_health INT DEFAULT 0;
     DECLARE v_roster_count INT DEFAULT 0;
     DECLARE v_input_count INT DEFAULT 0;
@@ -170,35 +173,113 @@ BEGIN
     WHERE session_id = p_session_id AND engine_npc_id = p_engine_npc_id;
 
     IF v_roster_count = 0 THEN
-        SELECT COALESCE(MAX(geracao), 0) INTO v_generation
-        FROM nn_genome
-        WHERE architecture_id = v_architecture_id;
-
-        SELECT COUNT(*) INTO v_population_count
-        FROM nn_genome
-        WHERE architecture_id = v_architecture_id AND geracao = v_generation;
-
-        IF v_population_count = 0 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A arquitetura não possui genomas';
-        END IF;
-
         SELECT COUNT(*) INTO v_npc_count
         FROM nn_session_npc
         WHERE session_id = p_session_id;
 
-        SELECT id INTO v_genome_id
-        FROM nn_genome
-        WHERE architecture_id = v_architecture_id AND geracao = v_generation
-        ORDER BY fitness DESC, id
-        LIMIT v_npc_count, 1;
+        SELECT COUNT(*), MAX(experiment_id)
+          INTO v_v2_experiment_count, v_v2_experiment_id
+        FROM nn_training_experiment_v2
+        WHERE architecture_id = v_architecture_id;
 
-        IF v_genome_id IS NULL THEN
-            SET v_genome_offset = MOD(v_npc_count, v_population_count);
+        IF v_v2_experiment_count > 1 THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Arquitetura associada a mais de um experimento genético v2';
+        ELSEIF v_v2_experiment_count = 1 THEN
+            SELECT COUNT(*), MAX(generation)
+              INTO v_v2_generation_count, v_generation
+            FROM nn_training_generation_v2
+            WHERE experiment_id = v_v2_experiment_id AND status = 'EVALUATING';
+            IF v_v2_generation_count <> 1 THEN
+                SIGNAL SQLSTATE '45000'
+                    SET MESSAGE_TEXT = 'Experimento genético v2 sem exatamente uma geração aberta';
+            END IF;
+
+            SELECT COUNT(*) INTO v_population_count
+            FROM nn_training_experiment_genome_v2 member
+            WHERE member.experiment_id = v_v2_experiment_id
+              AND member.generation = v_generation;
+            IF v_population_count = 0 THEN
+                SIGNAL SQLSTATE '45000'
+                    SET MESSAGE_TEXT = 'A geração v2 não possui genomas';
+            END IF;
+
+            -- Spread short rosters over the least-evaluated members. Without
+            -- this, sessions with fewer active monsters repeatedly assigned
+            -- only the first few genome IDs and could never finish a population.
+            SELECT member.genome_id INTO v_genome_id
+            FROM nn_training_experiment_genome_v2 member
+            LEFT JOIN (
+                SELECT evaluation.genome_id, COUNT(DISTINCT evaluation.session_id) AS trusted_count
+                FROM nn_genome_evaluation_training_v2 evaluation
+                JOIN nn_training_experiment_session_v2 evaluated_session
+                  ON evaluated_session.session_id = evaluation.session_id
+                JOIN nn_training_session_completion_v2 completion
+                  ON completion.session_id = evaluation.session_id
+                 AND completion.fitness_version = 'combat_outcome_v2_1'
+                 AND completion.ack_confirmed_at IS NOT NULL
+                WHERE evaluated_session.experiment_id = v_v2_experiment_id
+                  AND evaluated_session.generation = v_generation
+                  AND evaluation.attribution_version = 'neural_attack_provenance_v2'
+                  AND evaluation.fitness_version = 'combat_outcome_v2_1'
+                GROUP BY evaluation.genome_id
+            ) trusted ON trusted.genome_id = member.genome_id
+            WHERE member.experiment_id = v_v2_experiment_id
+              AND member.generation = v_generation
+            ORDER BY COALESCE(trusted.trusted_count, 0), member.genome_id
+            LIMIT v_npc_count, 1;
+
+            IF v_genome_id IS NULL AND v_npc_count >= v_population_count THEN
+                SET v_genome_offset = MOD(v_npc_count, v_population_count);
+                SELECT member.genome_id INTO v_genome_id
+                FROM nn_training_experiment_genome_v2 member
+                LEFT JOIN (
+                    SELECT evaluation.genome_id, COUNT(DISTINCT evaluation.session_id) AS trusted_count
+                    FROM nn_genome_evaluation_training_v2 evaluation
+                    JOIN nn_training_experiment_session_v2 evaluated_session
+                      ON evaluated_session.session_id = evaluation.session_id
+                    JOIN nn_training_session_completion_v2 completion
+                      ON completion.session_id = evaluation.session_id
+                     AND completion.fitness_version = 'combat_outcome_v2_1'
+                     AND completion.ack_confirmed_at IS NOT NULL
+                    WHERE evaluated_session.experiment_id = v_v2_experiment_id
+                      AND evaluated_session.generation = v_generation
+                      AND evaluation.attribution_version = 'neural_attack_provenance_v2'
+                      AND evaluation.fitness_version = 'combat_outcome_v2_1'
+                    GROUP BY evaluation.genome_id
+                ) trusted ON trusted.genome_id = member.genome_id
+                WHERE member.experiment_id = v_v2_experiment_id
+                  AND member.generation = v_generation
+                ORDER BY COALESCE(trusted.trusted_count, 0), member.genome_id
+                LIMIT v_genome_offset, 1;
+            END IF;
+        ELSE
+            SELECT COALESCE(MAX(geracao), 0) INTO v_generation
+            FROM nn_genome
+            WHERE architecture_id = v_architecture_id;
+
+            SELECT COUNT(*) INTO v_population_count
+            FROM nn_genome
+            WHERE architecture_id = v_architecture_id AND geracao = v_generation;
+
+            IF v_population_count = 0 THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A arquitetura não possui genomas';
+            END IF;
+
             SELECT id INTO v_genome_id
             FROM nn_genome
             WHERE architecture_id = v_architecture_id AND geracao = v_generation
             ORDER BY fitness DESC, id
-            LIMIT v_genome_offset, 1;
+            LIMIT v_npc_count, 1;
+
+            IF v_genome_id IS NULL THEN
+                SET v_genome_offset = MOD(v_npc_count, v_population_count);
+                SELECT id INTO v_genome_id
+                FROM nn_genome
+                WHERE architecture_id = v_architecture_id AND geracao = v_generation
+                ORDER BY fitness DESC, id
+                LIMIT v_genome_offset, 1;
+            END IF;
         END IF;
 
         INSERT INTO nn_session_npc (
