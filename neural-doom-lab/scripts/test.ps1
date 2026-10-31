@@ -46,12 +46,37 @@ try {
         if (-not (Test-Path -LiteralPath 'frontend\node_modules\playwright-core')) {
             throw 'Playwright host ausente. Execute npm ci em frontend antes da partida headless.'
         }
-        $env:NN_ARCHITECTURE_NAME = 'genetic_v2_ref46_20261031'
-        $env:DOOM_MATCH_SECONDS = '30'
-        & node frontend\scripts\automated-match.mjs
-        $matchExit = $LASTEXITCODE
-        Remove-Item Env:\NN_ARCHITECTURE_NAME -ErrorAction SilentlyContinue
-        Remove-Item Env:\DOOM_MATCH_SECONDS -ErrorAction SilentlyContinue
+        $matchArchitecture = $env:NN_ARCHITECTURE_NAME
+        if ([string]::IsNullOrWhiteSpace($matchArchitecture)) {
+            $architectureEnvFile = if ($Mode -eq 'Docker') { '.env' } else { 'backend\.env' }
+            if (Test-Path -LiteralPath $architectureEnvFile) {
+                foreach ($line in [IO.File]::ReadAllLines($architectureEnvFile)) {
+                    if ($line -match '^\s*NN_ARCHITECTURE_NAME\s*=\s*(.*?)\s*$') {
+                        $matchArchitecture = $Matches[1].Trim().Trim('"').Trim("'")
+                    }
+                }
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($matchArchitecture)) { $matchArchitecture = 'npc_teste_4_6_4' }
+        $previousMatchArchitecture = [Environment]::GetEnvironmentVariable('NN_ARCHITECTURE_NAME', 'Process')
+        $previousMatchSeconds = [Environment]::GetEnvironmentVariable('DOOM_MATCH_SECONDS', 'Process')
+        try {
+            $env:NN_ARCHITECTURE_NAME = $matchArchitecture
+            $env:DOOM_MATCH_SECONDS = '30'
+            & node frontend\scripts\automated-match.mjs
+            $matchExit = $LASTEXITCODE
+        } finally {
+            if ($null -eq $previousMatchArchitecture) {
+                Remove-Item Env:\NN_ARCHITECTURE_NAME -ErrorAction SilentlyContinue
+            } else {
+                $env:NN_ARCHITECTURE_NAME = $previousMatchArchitecture
+            }
+            if ($null -eq $previousMatchSeconds) {
+                Remove-Item Env:\DOOM_MATCH_SECONDS -ErrorAction SilentlyContinue
+            } else {
+                $env:DOOM_MATCH_SECONDS = $previousMatchSeconds
+            }
+        }
         if ($matchExit -ne 0) { throw 'Partida headless não passou nos checks de integração.' }
     }
     Write-Output 'Testes automatizados concluídos. Testes SQL de fixture rodam uma vez no setup limpo e ficam registrados no ledger.'

@@ -27,7 +27,7 @@ if (-not $MySqlExePath) {
     }
 }
 if (-not $MySqlExePath -or -not (Test-Path -LiteralPath $MySqlExePath)) {
-    throw 'mysql.exe não encontrado. Instale MySQL Server 8.0.46+ ou informe -MySqlExePath.'
+    throw 'mysql.exe não encontrado. Instale MySQL Server 8.0.46 ou informe -MySqlExePath.'
 }
 if (-not (Test-Path -LiteralPath $planPath)) { throw 'Plano de instalação ausente no clone.' }
 

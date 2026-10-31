@@ -99,7 +99,7 @@ try {
         if (-not $node) { $node = Get-Command node -ErrorAction SilentlyContinue }
         $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
         if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
-        if (-not $python -or -not $node -or -not $npm) { throw 'Windows precisa de Python 3.10+, Node.js/npm e MySQL Server 8.0.46+; nenhum instalador global foi executado.' }
+        if (-not $python -or -not $node -or -not $npm) { throw 'Windows precisa de Python 3.10+, Node.js/npm e MySQL Server 8.0.46; nenhum instalador global foi executado.' }
 
         $versionText = & $python.Source --version 2>&1
         if ($versionText -notmatch 'Python (\d+)\.(\d+)') { throw 'Não foi possível identificar a versão do Python.' }
