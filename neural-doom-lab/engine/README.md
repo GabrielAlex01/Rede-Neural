@@ -34,6 +34,23 @@ powershell -ExecutionPolicy Bypass -File .\engine\build-wasm.ps1 `
 
 `engine/vendor/`, `engine/build/` e o WAD local são ignorados. O patch e as instruções necessários para reconstruir permanecem no repositório; os artefatos compilados não são a única cópia da integração. O frontend pode ser validado separadamente com `cd frontend; npm run build`.
 
+## Regressão determinística de proveniência
+
+Com Emscripten 4.0.14 e Node.js disponíveis no `PATH`, execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\engine\tests\test-neural-attack-provenance.ps1
+```
+
+O teste compila um harness C pequeno fora do repositório e verifica os mesmos
+helpers de captura/resolução de origem usados por `P_SpawnMissile`, pelo ataque
+do Archvile e por `P_DamageMobj`. Ele cobre um projétil já criado quando o NPC
+morre ou retorna ao fallback, além de garantir que novos ataques de fallback,
+ORIGINAL_AI, dano efetivo zero e ataques sem dono não recebam crédito neural.
+Não altera a escolha da rede, os gates do Chocolate Doom ou o comportamento de
+combate. É uma regressão determinística da regra de proveniência, não uma
+simulação física nem evidência de aprendizado.
+
 ## Identidade, sessão e eventos
 
 - `npc_id` é um contador monotônico da engine durante a partida, não um endereço. Os eventos usam o mesmo ID enviado na decisão.

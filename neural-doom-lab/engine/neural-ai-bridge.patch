@@ -1,5 +1,5 @@
 diff --git a/src/doom/CMakeLists.txt b/src/doom/CMakeLists.txt
-index 6e878a0f1397d9b5db8bda088874e97c67f61253..c8a4eefcc5bb04bb353958e434b3a9dd88ffa85f 100644
+index 6e878a0f..c8a4eefc 100644
 --- a/src/doom/CMakeLists.txt
 +++ b/src/doom/CMakeLists.txt
 @@ -39,6 +39,7 @@ add_library(doom STATIC
@@ -11,18 +11,19 @@ index 6e878a0f1397d9b5db8bda088874e97c67f61253..c8a4eefcc5bb04bb353958e434b3a9dd
              p_pspr.c        p_pspr.h
              p_saveg.c       p_saveg.h
 diff --git a/src/doom/p_enemy.c b/src/doom/p_enemy.c
-index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b56178160 100644
+index c6acf390..8f667888 100644
 --- a/src/doom/p_enemy.c
 +++ b/src/doom/p_enemy.c
-@@ -26,6 +26,7 @@
+@@ -26,6 +26,8 @@
  
  #include "doomdef.h"
  #include "p_local.h"
 +#include "p_neural_ai.h"
++#include "p_neural_ai_provenance.h"
  
  #include "s_sound.h"
  
-@@ -656,6 +657,8 @@ void A_Look (mobj_t* actor)
+@@ -656,6 +658,8 @@ void A_Look (mobj_t* actor)
  }
  
  
@@ -31,7 +32,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b
  //
  // A_Chase
  // Actor has a melee attack,
-@@ -664,6 +667,11 @@ void A_Look (mobj_t* actor)
+@@ -664,6 +668,11 @@ void A_Look (mobj_t* actor)
  void A_Chase (mobj_t*	actor)
  {
      int		delta;
@@ -43,7 +44,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b
  
      if (actor->reactiontime)
  	actor->reactiontime--;
-@@ -703,6 +711,20 @@ void A_Chase (mobj_t*	actor)
+@@ -703,6 +712,20 @@ void A_Chase (mobj_t*	actor)
  	P_SetMobjState (actor, actor->info->spawnstate);
  	return;
      }
@@ -64,7 +65,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b
      
      // do not attack twice in a row
      if (actor->flags & MF_JUSTATTACKED)
-@@ -767,6 +789,58 @@ void A_Chase (mobj_t*	actor)
+@@ -767,6 +790,58 @@ void A_Chase (mobj_t*	actor)
      }
  }
  
@@ -123,7 +124,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b
  
  //
  // A_FaceTarget
-@@ -1215,6 +1289,8 @@ void A_VileChase (mobj_t* actor)
+@@ -1215,6 +1290,8 @@ void A_VileChase (mobj_t* actor)
  		    corpsehit->flags = info->flags;
  		    corpsehit->health = info->spawnhealth;
  		    corpsehit->target = NULL;
@@ -132,28 +133,31 @@ index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b
  
  		    return;
  		}
-@@ -1301,6 +1377,8 @@ void A_VileTarget (mobj_t*	actor)
+@@ -1301,6 +1378,10 @@ void A_VileTarget (mobj_t*	actor)
      actor->tracer = fog;
      fog->target = actor;
      fog->tracer = actor->target;
-+    if (actor->neural_evaluation_member && actor->neural_attack_active)
-+        fog->neural_attack_owner_id = actor->neural_instance_id;
++    fog->neural_attack_owner_id = NAI_SnapshotAttackOwnerId(
++        actor->neural_instance_id,
++        actor->neural_evaluation_member,
++        actor->neural_attack_active);
      A_Fire (fog);
  }
  
 diff --git a/src/doom/p_inter.c b/src/doom/p_inter.c
-index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74e39ea86e 100644
+index b6e40329..e5a15cc3 100644
 --- a/src/doom/p_inter.c
 +++ b/src/doom/p_inter.c
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,8 @@
  #include "am_map.h"
  
  #include "p_local.h"
 +#include "p_neural_ai.h"
++#include "p_neural_ai_provenance.h"
  
  #include "s_sound.h"
  
-@@ -679,6 +680,9 @@ P_KillMobj
+@@ -679,6 +681,9 @@ P_KillMobj
      mobjtype_t	item;
      mobj_t*	mo;
  	
@@ -163,7 +167,7 @@ index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74
      target->flags &= ~(MF_SHOOTABLE|MF_FLOAT|MF_SKULLFLY);
  
      if (target->type != MT_SKULL)
-@@ -796,6 +800,8 @@ P_DamageMobj
+@@ -796,6 +801,8 @@ P_DamageMobj
      player_t*	player;
      fixed_t	thrust;
      int		temp;
@@ -172,7 +176,7 @@ index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74
  	
      if ( !(target->flags & MF_SHOOTABLE) )
  	return;	// shouldn't happen...
-@@ -896,10 +902,40 @@ P_DamageMobj
+@@ -896,10 +903,39 @@ P_DamageMobj
  	    I_Tactile (40,10,40+temp*2);
      }
      
@@ -182,19 +186,17 @@ index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74
 +
 +    neural_attack_owner_id = 0;
 +    if (target->player && inflictor != NULL)
-+    {
-+        if (inflictor == source && source != NULL
-+            && source->neural_evaluation_member
-+            && source->neural_attack_active)
-+            neural_attack_owner_id = source->neural_instance_id;
-+        else
-+            neural_attack_owner_id = inflictor->neural_attack_owner_id;
-+    }
++        neural_attack_owner_id = NAI_ResolveAttackOwnerId(
++            inflictor->neural_attack_owner_id,
++            inflictor == source,
++            source != NULL ? source->neural_instance_id : 0,
++            source != NULL ? source->neural_evaluation_member : 0,
++            source != NULL ? source->neural_attack_active : 0);
 +
 +    if (effective_damage < 0)
 +        effective_damage = 0;
-+    if (target->player && neural_attack_owner_id != 0
-+        && effective_damage > 0)
++    if (target->player && NAI_CanCreditPlayerCombatEvent(
++            neural_attack_owner_id, effective_damage))
 +        NAI_ReportCombatEventByInstanceId(neural_attack_owner_id,
 +                                         NAI_EVENT_PLAYER_DAMAGE,
 +                                         effective_damage);
@@ -205,7 +207,8 @@ index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74
      target->health -= damage;	
      if (target->health <= 0)
      {
-+        if (target->player && neural_attack_owner_id != 0)
++        if (target->player && NAI_CanCreditPlayerCombatEvent(
++                neural_attack_owner_id, 1))
 +            NAI_ReportCombatEventByInstanceId(neural_attack_owner_id,
 +                                              NAI_EVENT_PLAYER_KILL, 1);
 +        if (target->neural_evaluation_member)
@@ -214,18 +217,19 @@ index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74
  	return;
      }
 diff --git a/src/doom/p_mobj.c b/src/doom/p_mobj.c
-index 481c52822d13ac25ffce8d4a275c22d6a65400a2..8d3d48c767bd41aa7be6e46a3dac7f5cfb50b2b3 100644
+index 481c5282..4a460f5a 100644
 --- a/src/doom/p_mobj.c
 +++ b/src/doom/p_mobj.c
-@@ -24,6 +24,7 @@
+@@ -24,6 +24,8 @@
  
  #include "doomdef.h"
  #include "p_local.h"
 +#include "p_neural_ai.h"
++#include "p_neural_ai_provenance.h"
  #include "sounds.h"
  
  #include "st_stuff.h"
-@@ -37,6 +38,17 @@
+@@ -37,6 +39,17 @@
  void G_PlayerReborn (int player);
  void P_SpawnMapThing (mapthing_t*	mthing);
  
@@ -243,7 +247,7 @@ index 481c52822d13ac25ffce8d4a275c22d6a65400a2..8d3d48c767bd41aa7be6e46a3dac7f5c
  
  //
  // P_SetMobjState
-@@ -531,6 +543,7 @@ P_SpawnMobj
+@@ -531,6 +544,7 @@ P_SpawnMobj
  	
      mobj->type = type;
      mobj->info = info;
@@ -251,17 +255,19 @@ index 481c52822d13ac25ffce8d4a275c22d6a65400a2..8d3d48c767bd41aa7be6e46a3dac7f5c
      mobj->x = x;
      mobj->y = y;
      mobj->radius = info->radius;
-@@ -987,6 +1000,8 @@ P_SpawnMissile
+@@ -987,6 +1001,10 @@ P_SpawnMissile
  	S_StartSound (th, th->info->seesound);
  
      th->target = source;	// where it came from
-+    if (source->neural_evaluation_member && source->neural_attack_active)
-+        th->neural_attack_owner_id = source->neural_instance_id;
++    th->neural_attack_owner_id = NAI_SnapshotAttackOwnerId(
++        source->neural_instance_id,
++        source->neural_evaluation_member,
++        source->neural_attack_active);
      an = R_PointToAngle2 (source->x, source->y, dest->x, dest->y);
  
      // fuzzy player
 diff --git a/src/doom/p_mobj.h b/src/doom/p_mobj.h
-index 90ed764b91c7de405d2bb5a98c348ad9083645b1..eefbada01a4e2a6d90d1c48e714f32b1aabf91bc 100644
+index 90ed764b..eefbada0 100644
 --- a/src/doom/p_mobj.h
 +++ b/src/doom/p_mobj.h
 @@ -248,6 +248,15 @@ typedef struct mobj_s
@@ -290,7 +296,7 @@ index 90ed764b91c7de405d2bb5a98c348ad9083645b1..eefbada01a4e2a6d90d1c48e714f32b1
  #endif
 diff --git a/src/doom/p_neural_ai.c b/src/doom/p_neural_ai.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..7cab38d76ed2723f9b26be1b30747cbc332e47d2
+index 00000000..7cab38d7
 --- /dev/null
 +++ b/src/doom/p_neural_ai.c
 @@ -0,0 +1,163 @@
@@ -459,7 +465,7 @@ index 0000000000000000000000000000000000000000..7cab38d76ed2723f9b26be1b30747cbc
 +}
 diff --git a/src/doom/p_neural_ai.h b/src/doom/p_neural_ai.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..ff7da44a789558a5ef708175e490a3b8daca25bd
+index 00000000..ff7da44a
 --- /dev/null
 +++ b/src/doom/p_neural_ai.h
 @@ -0,0 +1,38 @@
@@ -501,8 +507,50 @@ index 0000000000000000000000000000000000000000..ff7da44a789558a5ef708175e490a3b8
 +                                       int value);
 +
 +#endif
+diff --git a/src/doom/p_neural_ai_provenance.h b/src/doom/p_neural_ai_provenance.h
+new file mode 100644
+index 00000000..f071658d
+--- /dev/null
++++ b/src/doom/p_neural_ai_provenance.h
+@@ -0,0 +1,36 @@
++#ifndef DOOM_P_NEURAL_AI_PROVENANCE_H
++#define DOOM_P_NEURAL_AI_PROVENANCE_H
++
++/*
++ * Small, deterministic provenance rules shared by the engine and the
++ * regression test. These helpers record origin only; they do not select or
++ * apply neural actions.
++ */
++static inline unsigned int NAI_SnapshotAttackOwnerId(
++    unsigned int instance_id, int evaluation_member, int attack_active)
++{
++    return instance_id != 0 && evaluation_member && attack_active
++        ? instance_id : 0;
++}
++
++static inline unsigned int NAI_ResolveAttackOwnerId(
++    unsigned int inflictor_owner_id,
++    int inflictor_is_source,
++    unsigned int source_instance_id,
++    int source_evaluation_member,
++    int source_attack_active)
++{
++    if (inflictor_is_source && source_instance_id != 0
++        && source_evaluation_member && source_attack_active)
++        return source_instance_id;
++
++    return inflictor_owner_id;
++}
++
++static inline int NAI_CanCreditPlayerCombatEvent(
++    unsigned int attack_owner_id, int event_value)
++{
++    return attack_owner_id != 0 && event_value > 0;
++}
++
++#endif
 diff --git a/src/doom/p_saveg.c b/src/doom/p_saveg.c
-index 1192bff90bb1145690b54e0b73f40ba86b6e117d..924547a627fe4e911c80b545654a3ab9a4612037 100644
+index 1192bff9..924547a6 100644
 --- a/src/doom/p_saveg.c
 +++ b/src/doom/p_saveg.c
 @@ -1649,6 +1649,11 @@ void P_UnArchiveThinkers (void)
