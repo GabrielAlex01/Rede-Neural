@@ -18,6 +18,7 @@ NPC = {
     "player_distance": 3010,
     "player_visible": True,
     "current_state": 482,
+    "attribution_version": "neural_attack_provenance_v2",
 }
 ACTION_METRICS = {
     "opportunities": 4,
@@ -70,12 +71,16 @@ class FakeCursor:
         self.outputs = outputs
         self.procedure = None
         self.parameters = None
+        self.calls = []
         self.closed = False
 
     def callproc(self, procedure, parameters):
         self.procedure = procedure
         self.parameters = parameters
-        return (*parameters[:-3], *self.outputs)
+        self.calls.append((procedure, parameters))
+        if procedure in {"sp_nn_decide", "sp_nn_decide_for_architecture"}:
+            return (*parameters[:-3], *self.outputs)
+        return parameters
 
     def close(self):
         self.closed = True
@@ -121,6 +126,11 @@ class DecisionServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_observation(SESSION_ID, {**NPC, "health": 101})
 
+    def test_missing_provenance_marker_is_rejected_before_sql(self):
+        observation = {key: value for key, value in NPC.items() if key != "attribution_version"}
+        with self.assertRaises(ValueError):
+            validate_observation(SESSION_ID, observation)
+
     def test_decision_is_returned_by_mysql_procedure(self):
         cursor = FakeCursor((41, "ATTACK", 0.982))
         connection = FakeConnection(cursor)
@@ -128,10 +138,11 @@ class DecisionServiceTests(unittest.TestCase):
 
         decision = service.decide(SESSION_ID, NPC)
 
-        self.assertEqual(cursor.procedure, "sp_nn_decide")
-        self.assertEqual(cursor.parameters[0], SESSION_ID)
-        self.assertEqual(cursor.parameters[1], "3052044")
-        self.assertEqual(cursor.parameters[4], 100)
+        self.assertEqual(cursor.calls[0][0], "sp_nn_decide")
+        self.assertEqual(cursor.calls[0][1][0], SESSION_ID)
+        self.assertEqual(cursor.calls[0][1][1], "3052044")
+        self.assertEqual(cursor.calls[0][1][4], 100)
+        self.assertEqual(cursor.calls[1], ("sp_nn_mark_session_v2", (SESSION_ID,)))
         self.assertEqual(decision, {"run_id": 41, "action": "ATTACK", "confidence": 0.982})
         self.assertTrue(connection.committed)
         self.assertTrue(cursor.closed)
@@ -146,9 +157,10 @@ class DecisionServiceTests(unittest.TestCase):
 
         decision = service.decide(SESSION_ID, NPC)
 
-        self.assertEqual(cursor.procedure, "sp_nn_decide_for_architecture")
-        self.assertEqual(cursor.parameters[0], "npc_teste_4_64_32_64_4")
-        self.assertEqual(cursor.parameters[1], SESSION_ID)
+        self.assertEqual(cursor.calls[0][0], "sp_nn_decide_for_architecture")
+        self.assertEqual(cursor.calls[0][1][0], "npc_teste_4_64_32_64_4")
+        self.assertEqual(cursor.calls[0][1][1], SESSION_ID)
+        self.assertEqual(cursor.calls[1][0], "sp_nn_mark_session_v2")
         self.assertEqual(decision, {"run_id": 52, "action": "FLEE", "confidence": 0.81})
 
     def test_invalid_mysql_action_is_rejected(self):
@@ -185,7 +197,7 @@ class DecisionServiceTests(unittest.TestCase):
 
         service.close_session(SESSION_ID)
 
-        self.assertEqual(cursor.procedure, "sp_nn_finish_session")
+        self.assertEqual(cursor.procedure, "sp_nn_finish_session_v2")
         self.assertEqual(cursor.parameters[0], SESSION_ID)
         self.assertTrue(connection.committed)
 

@@ -22,7 +22,7 @@ Achados dos dados existentes:
 
 Suspeita concreta confirmada por inspeção do engine: `A_Chase` só marcava `neural_controlled` depois de uma ação aceita, mas mantinha a marca latched pelo restante da vida do NPC. Quando uma oferta neural era rejeitada, `A_Chase` continuava na IA original. `NAI_ReportCombatEvent` usava a marca latched para atribuir ao genoma dano e eliminações feitos pelo NPC. Como a H64 geração 1 só pediu `FLEE`, ela não podia causar dano por uma ação de ataque neural; o dano ao jogador atribuído a essa geração veio do caminho vanilla/fallback (ou de projéteis iniciados por esse caminho). Os eventos antigos não guardam proveniência suficiente para estimar a fração exata por origem. As avaliações e seus fitness não foram apagados nem recalculados.
 
-## Correção em andamento — NÃO validada
+## Correção em andamento — estado no checkpoint de 25/10 (depois concluída)
 
 Foi editado o patch versionado e a árvore-fonte vendorizada ignorada dentro deste clone. A proposta adiciona proveniência de ataque no ator/projétil, marca como membro avaliado todo NPC que recebeu uma decisão SQL válida (mesmo que rejeitada), marca ataque neural somente depois dos gates originais do engine, e só credita `PLAYER_DAMAGE`/`PLAYER_KILL` quando o dano veio de melee neural ou de míssil originado por um ataque neural. O dano reportado passa a ser limitado ao dano efetivamente removido da vida do jogador. O cooldown `MF_JUSTATTACKED` é mantido. Nenhum gate de combate foi enfraquecido.
 
@@ -38,3 +38,11 @@ As mudanças estão em `neural-doom-lab/engine/neural-ai-bridge.patch` e, para b
 6. Rodar testes backend/frontend/SQL e revisar o diff. Só então fazer commits separados para engine/telemetria e documentação/experimentos; sem push/merge.
 
 Não houve novo treinamento nem partidas nesta etapa. O build e as partidas automatizadas anteriores descritos em `docs/experimentos-2026-10-25.md` continuam sendo o baseline anterior à correção.
+
+## Atualização de 31/10/2026
+
+A proveniência foi corrigida, o patch foi aplicado a um checkout limpo do commit upstream fixado e o WASM compilou com 165/165 etapas. `neural_attack_active` só passa a verdadeiro quando o engine aceita ATTACK; termina no retorno a `A_Chase`, morte ou ressurreição. Projéteis guardam o ID do atacante no spawn, e impactos tardios são atribuídos pelo ID salvo, sem depender do ponteiro do NPC. Fallback/ORIGINAL_AI não gera crédito positivo de dano/eliminações.
+
+A migration aditiva e os testes SQL v2 estão em `neural-doom-lab/database/`. Sessões novas são marcadas em tabela lateral após uma observação do engine que declara `neural_attack_provenance_v2`; avaliações v2 são isoladas e não atualizam fitness legados. A conta instaladora não tinha `ALTER`, e nenhuma permissão foi aumentada.
+
+Quatro partidas automatizadas, duas com H64 geração 1 e duas com a referência 4→6→4 geração 1, foram encerradas por ACK e persistidas no schema de jogo. A referência produziu ATTACK aplicado, dano e uma eliminação por partida; H64 escolheu apenas FLEE. Resultados, sessões, ativações, métricas, limitações e a ausência de uma sessão humana estão detalhados em `neural-doom-lab/docs/avaliacao-proveniencia-v2-2026-10-31.md`. Nenhuma nova geração foi evoluída e não há afirmação de aprendizado.

@@ -2,7 +2,7 @@
 
 O jogo usa o bundle em `frontend/public/engine/`. A implementação C do bridge está versionada como patch reproduzível em `neural-ai-bridge.patch`, aplicado sobre Chocolate Doom no commit fixo `3e0cd5dc0cd0d5b6788100a2fbc1cdd4ce014b35`. Não é necessário editar nem copiar arquivos do workspace original `doom-wasm`.
 
-O patch integra o ponto de decisão em `A_Chase`, identifica atores com ID próprio, envia vida atual/máxima, distância, visibilidade e estado diagnóstico ao JavaScript, aplica `IDLE`, `CHASE`, `ATTACK` ou `FLEE` e só reporta combate depois que uma ação externa foi aplicada. Estados inválidos ou ausentes deixam a lógica original seguir. A variação de HP é calculada no MySQL entre observações reais consecutivas do mesmo `(session_id, engine_npc_id)`.
+O patch integra o ponto de decisão em `A_Chase`, identifica atores com ID próprio, envia vida atual/máxima, distância, visibilidade, estado diagnóstico e `attribution_version=neural_attack_provenance_v2` ao JavaScript. Aplica `IDLE`, `CHASE`, `ATTACK` ou `FLEE` sem remover os gates originais do engine. Estados inválidos ou ausentes deixam a lógica original seguir. A variação de HP é calculada no MySQL entre observações reais consecutivas do mesmo `(session_id, engine_npc_id)`.
 
 ## Recompilar no Windows
 
@@ -40,7 +40,9 @@ powershell -ExecutionPolicy Bypass -File .\engine\build-wasm.ps1 `
 - O frontend cria UUID novo por partida; o MySQL relaciona genoma e NPC pelo par sessão/ID do engine.
 - `max_health` permite calcular `HEALTH_RATIO`; o HP anterior persistido permite calcular `HEALTH_DELTA`. Na primeira decisão de cada NPC na sessão, delta é zero. Dano recebido entre decisões aparece agregado na próxima observação. Após morte não há novas decisões; `NPC_DEATH` é enviado uma vez. Nova partida cria sessão e IDs novos, sem herdar HP anterior.
 - O estado de `actor->state` é enviado somente para diagnóstico. Não é entrada contínua da rede.
-- O backend do browser só aceita uma resposta correspondente ao NPC/request pendente. O bridge marca o NPC como controlado apenas quando a ação é aplicada; respostas atrasadas/inválidas preservam a IA original.
-- `p_inter.c` registra dano real ao jogador, eliminações do jogador, dano real recebido por NPC neural e morte de NPC neural. Eventos de NPC só seguem para o backend quando esse ator já recebeu uma ação externa aplicada.
+- O backend só aceita observações marcadas como v2. O bridge marca um NPC como membro da avaliação quando recebe uma resposta SQL válida, inclusive se o engine rejeitar a oferta; respostas atrasadas/inválidas preservam `ORIGINAL_AI`.
+- `neural_attack_active` só é ativado depois que `ATTACK` passa pelos gates originais de cooldown e geometria. Ele termina quando o ator volta a `A_Chase`, morre ou é ressuscitado. Cada projétil copia o ID do atacante no momento do spawn, então um impacto posterior continua atribuível mesmo se o NPC morrer ou voltar à IA original.
+- `p_inter.c` registra `PLAYER_DAMAGE` e `PLAYER_KILL` somente para dano real iniciado por `ATTACK` neural aceito. Dano causado por `ORIGINAL_AI`/fallback não recebe crédito positivo neural. Dano recebido e morte de NPC permanecem como resultados negativos do NPC alocado à avaliação.
+- Sessões v2 são marcadas em `nn_engine_session_provenance_v2` e avaliadas em tabelas v2 separadas. Os registros e fitness legados não são recalculados nem misturados. Instale `database/migrations/12_attack_provenance_v2.sql` no schema de jogo e no schema de testes isolados.
 
 O build comprova que o bridge compila e que os arquivos são gerados. Só uma partida real pode validar perseguição, ataque, evasão, mortes, comportamento multi-NPC, latência e fallback integral.

@@ -39,6 +39,7 @@ class NpcObservation:
     player_distance: float
     player_visible: int
     current_state: int
+    attribution_version: str
 
 
 def _integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
@@ -69,6 +70,9 @@ def validate_observation(session_id: Any, npc: Any) -> tuple[str, NpcObservation
     max_health = _integer(npc.get("max_health"), "max_health", minimum=1, maximum=2_147_483_647)
     health = _integer(npc.get("health"), "health", minimum=0, maximum=max_health)
     current_state = _integer(npc.get("current_state"), "current_state", minimum=0, maximum=2_147_483_647)
+    attribution_version = npc.get("attribution_version")
+    if attribution_version != "neural_attack_provenance_v2":
+        raise InvalidRequest("versão de atribuição do engine ausente ou incompatível")
 
     visible = npc.get("player_visible")
     if isinstance(visible, bool):
@@ -93,6 +97,7 @@ def validate_observation(session_id: Any, npc: Any) -> tuple[str, NpcObservation
         player_distance=player_distance,
         player_visible=player_visible,
         current_state=current_state,
+        attribution_version=attribution_version,
     )
 
 
@@ -172,6 +177,7 @@ class DatabaseDecisionService:
             else:
                 procedure = "sp_nn_decide"
             result = cursor.callproc(procedure, parameters)
+            cursor.callproc("sp_nn_mark_session_v2", (canonical_session_id,))
             connection.commit()
         except InvalidRequest:
             raise
@@ -258,7 +264,7 @@ class DatabaseDecisionService:
         try:
             connection = self._get_pool().get_connection()
             cursor = connection.cursor()
-            cursor.callproc("sp_nn_finish_session", (canonical_session_id,))
+            cursor.callproc("sp_nn_finish_session_v2", (canonical_session_id,))
             connection.commit()
         except Exception as exc:
             if connection is not None:

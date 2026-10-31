@@ -290,10 +290,10 @@ index 90ed764b91c7de405d2bb5a98c348ad9083645b1..eefbada01a4e2a6d90d1c48e714f32b1
  #endif
 diff --git a/src/doom/p_neural_ai.c b/src/doom/p_neural_ai.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..f20bd32d4f95f4d6a3444e629f16bbcfd0981fc0
+index 0000000000000000000000000000000000000000..7cab38d76ed2723f9b26be1b30747cbc332e47d2
 --- /dev/null
 +++ b/src/doom/p_neural_ai.c
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,163 @@
 +#include "doomdef.h"
 +#include "p_local.h"
 +#include "p_neural_ai.h"
@@ -323,6 +323,7 @@ index 0000000000000000000000000000000000000000..f20bd32d4f95f4d6a3444e629f16bbcf
 +            player_distance,
 +            player_visible: Boolean(player_visible),
 +            current_state: Math.max(0, current_state),
++            attribution_version: 'neural_attack_provenance_v2',
 +        });
 +
 +        return Number.isInteger(decision) ? decision : -1;
