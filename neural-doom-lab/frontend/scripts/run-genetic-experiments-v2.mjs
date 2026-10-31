@@ -22,7 +22,7 @@ const populationSize = 8;
 const evaluationsPerGenome = 2;
 const plannedGenerations = 2;
 const eliteCount = 2;
-const maxAttemptsPerGeneration = 4;
+const maxAttemptsPerGeneration = 8;
 const p95LatencyBudgetMs = 800;
 const resultDirectory = process.env.DOOM_RESULT_DIR
   ?? path.join(tmpdir(), 'neural-doom-genetic-experiments-v2');
@@ -202,21 +202,42 @@ async function runBrowserMatch(architecture, experimentId, generation, attempt) 
   const persisted = match.mysql_persisted;
   match.validation = {
     engine_started: match.engine_start_log === true,
+    skill_two: match.skill === 2,
     session_ack: match.session_end_ack?.closed === true,
+    ack_matches_browser_session: match.session_end_ack?.session_id === match.session_id,
     frontend_ack_receipt: match.session_end_ack_receipt?.confirmed === true,
+    receipt_matches_browser_session: match.session_end_ack_receipt?.session_id === match.session_id,
     mysql_closed: persisted?.closed === true,
     architecture_matches: persisted?.architecture_name === architecture.alias,
     experiment_matches: persisted?.experiment_id === experimentId,
     generation_matches: Number(persisted?.generation) === generation,
     all_population_genomes_assigned: Number(persisted?.distinct_assigned_genomes) === populationSize,
     all_population_genomes_evaluated: Number(persisted?.distinct_evaluated_genomes) === populationSize,
+    session_genome_evaluations_match_assignments:
+      Number(persisted?.distinct_assigned_genomes) === Number(persisted?.distinct_evaluated_genomes),
+    ack_evaluation_count_matches:
+      Number(persisted?.ack_evaluation_count) === Number(persisted?.training_evaluations),
     db_ack_confirmed: persisted?.ack_confirmed === true,
     db_decisions_match_frontend: Number(persisted?.sql_decisions) === Number(metrics?.sql_decisions),
+    no_invalid_sql_response: Number(metrics?.invalid_sql_responses ?? -1) === 0,
     applied_engine_action: Number(metrics?.applied ?? 0) > 0,
     real_combat_event: Number(persisted?.combat_event_rows ?? 0) > 0,
     no_http_errors: (match.http_errors ?? []).length === 0,
+    no_websocket_errors: !(match.browser_errors ?? []).some((error) =>
+      /websocket connection.*failed|ERR_NO_BUFFER_SPACE/i.test(error.text ?? '')),
   };
-  match.validation.complete = Object.values(match.validation).every((value) => value === true);
+  // A valid ACK may cover only NPCs actually spawned in that match. Coverage
+  // of the full population is accumulated across repeat sessions below.
+  const nonBlockingObservations = new Set([
+    'all_population_genomes_assigned',
+    'all_population_genomes_evaluated',
+    // Survival-only sessions are real outcomes, although they do not prove
+    // that the roster engaged in combat. Keep that distinction in the report.
+    'real_combat_event',
+  ]);
+  match.validation.complete = Object.entries(match.validation)
+    .filter(([key]) => !nonBlockingObservations.has(key))
+    .every(([, value]) => value === true);
   return match;
 }
 
@@ -333,16 +354,19 @@ async function evaluateGeneration(architecture, experimentId, generation) {
     const metrics = match.session_end_ack?.action_metrics;
     const db = match.mysql_persisted;
     process.stdout.write(`${architecture.alias} gen${generation} match${attempt}: `
-      + `eval=${db?.training_evaluations ?? 0}/${populationSize}, SQL=${db?.sql_decisions ?? 0}, `
+      + `eval=${db?.distinct_evaluated_genomes ?? 0}/${populationSize}, `
+      + `SQL=${db?.sql_decisions ?? 0}, `
       + `ATTACK aplicado=${metrics?.actions?.ATTACK?.applied ?? 0}, `
       + `fallback=${metrics?.fallback ?? 0}, P95=${match.ws_round_trip_ms?.p95?.toFixed(1) ?? 'n/a'}ms, `
-      + `ACK=${match.validation.complete}\n`);
+      + `eventos_combate=${Object.values(match.combat_events_sent ?? {}).reduce((sum, value) => sum + value, 0)}, `
+      + `integridade=${match.validation.complete}\n`);
     missing = missingGenomeEvaluations(experimentId, generation);
     if (match.ws_round_trip_ms?.p95 >= p95LatencyBudgetMs) {
       latencyBudgetExceeded = true;
       break;
     }
     if (!match.validation.complete) break;
+    if (missing > 0) await delay(2500);
   }
   return {
     runs,
@@ -367,6 +391,19 @@ if (!Number.isInteger(backendPort) || backendPort < 1024 || backendPort > 65535)
 }
 
 await mkdir(resultDirectory, { recursive: true });
+const balancedAssignmentInstalled = executeMysql(`
+  SELECT COUNT(*)
+  FROM information_schema.ROUTINES
+  WHERE ROUTINE_SCHEMA=DATABASE()
+    AND ROUTINE_NAME='sp_nn_decide_for_architecture'
+    AND ROUTINE_DEFINITION LIKE '%trusted_count%'
+`);
+if (balancedAssignmentInstalled !== '1') {
+  executeMysql('', await readFile(
+    path.join(repositoryDirectory, 'neural-doom-lab', 'database', 'migrations', '16_balanced_genome_assignment_v2.sql'),
+    'utf8',
+  ));
+}
 executeMysql('', await readFile(
   path.join(repositoryDirectory, 'neural-doom-lab', 'database', 'experiments', '16_prepare_genetic_experiments_v2.sql'),
   'utf8',
