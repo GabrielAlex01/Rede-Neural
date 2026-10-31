@@ -11,7 +11,7 @@ index 6e878a0f1397d9b5db8bda088874e97c67f61253..c8a4eefcc5bb04bb353958e434b3a9dd
              p_pspr.c        p_pspr.h
              p_saveg.c       p_saveg.h
 diff --git a/src/doom/p_enemy.c b/src/doom/p_enemy.c
-index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c78065382b38c55 100644
+index c6acf390e786742228d161e5fdf73ec843116133..21b9c4d80899d3384e9b094221d1437b56178160 100644
 --- a/src/doom/p_enemy.c
 +++ b/src/doom/p_enemy.c
 @@ -26,6 +26,7 @@
@@ -31,16 +31,19 @@ index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c780653
  //
  // A_Chase
  // Actor has a melee attack,
-@@ -664,6 +667,8 @@ void A_Look (mobj_t* actor)
+@@ -664,6 +667,11 @@ void A_Look (mobj_t* actor)
  void A_Chase (mobj_t*	actor)
  {
      int		delta;
 +    neural_ai_action_t external_action;
 +    boolean external_action_applied;
++
++    // Attack provenance ends when the actor returns to its chase state.
++    actor->neural_attack_active = 0;
  
      if (actor->reactiontime)
  	actor->reactiontime--;
-@@ -703,6 +708,18 @@ void A_Chase (mobj_t*	actor)
+@@ -703,6 +711,20 @@ void A_Chase (mobj_t*	actor)
  	P_SetMobjState (actor, actor->info->spawnstate);
  	return;
      }
@@ -48,18 +51,20 @@ index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c780653
 +    external_action = NAI_RequestDecision(actor);
 +    if (external_action != NAI_ACTION_INVALID)
 +    {
++        // Track outcomes for this assigned genome even when the engine rejects
++        // its action. Player damage attribution is gated separately below.
++        actor->neural_evaluation_member = 1;
 +        external_action_applied = NAI_ApplyDecision(actor, external_action);
 +        NAI_ReportResult(actor, external_action, external_action_applied);
 +        if (external_action_applied)
 +        {
-+            actor->neural_controlled = 1;
 +            return;
 +        }
 +    }
      
      // do not attack twice in a row
      if (actor->flags & MF_JUSTATTACKED)
-@@ -767,6 +784,56 @@ void A_Chase (mobj_t*	actor)
+@@ -767,6 +789,58 @@ void A_Chase (mobj_t*	actor)
      }
  }
  
@@ -88,6 +93,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c780653
 +
 +            if (actor->info->meleestate && P_CheckMeleeRange(actor))
 +            {
++                actor->neural_attack_active = 1;
 +                if (actor->info->attacksound)
 +                    S_StartSound(actor, actor->info->attacksound);
 +                P_SetMobjState(actor, actor->info->meleestate);
@@ -95,6 +101,7 @@ index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c780653
 +            }
 +            if (actor->info->missilestate && P_CheckMissileRange(actor))
 +            {
++                actor->neural_attack_active = 1;
 +                P_SetMobjState(actor, actor->info->missilestate);
 +                actor->flags |= MF_JUSTATTACKED;
 +                return true;
@@ -116,8 +123,26 @@ index c6acf390e786742228d161e5fdf73ec843116133..221f16a74fa1064eb81f821e2c780653
  
  //
  // A_FaceTarget
+@@ -1215,6 +1289,8 @@ void A_VileChase (mobj_t* actor)
+ 		    corpsehit->flags = info->flags;
+ 		    corpsehit->health = info->spawnhealth;
+ 		    corpsehit->target = NULL;
++            corpsehit->neural_attack_active = 0;
++            corpsehit->neural_attack_owner_id = 0;
+ 
+ 		    return;
+ 		}
+@@ -1301,6 +1377,8 @@ void A_VileTarget (mobj_t*	actor)
+     actor->tracer = fog;
+     fog->target = actor;
+     fog->tracer = actor->target;
++    if (actor->neural_evaluation_member && actor->neural_attack_active)
++        fog->neural_attack_owner_id = actor->neural_instance_id;
+     A_Fire (fog);
+ }
+ 
 diff --git a/src/doom/p_inter.c b/src/doom/p_inter.c
-index b6e403298d71263981c4acf721c8455268abe8f1..9d28712b434129fcfc6449c61e139e0e26d46710 100644
+index b6e403298d71263981c4acf721c8455268abe8f1..feccee2fd3564c5d1fe49572f3f13a74e39ea86e 100644
 --- a/src/doom/p_inter.c
 +++ b/src/doom/p_inter.c
 @@ -34,6 +34,7 @@
@@ -128,15 +153,26 @@ index b6e403298d71263981c4acf721c8455268abe8f1..9d28712b434129fcfc6449c61e139e0e
  
  #include "s_sound.h"
  
-@@ -796,6 +797,7 @@ P_DamageMobj
+@@ -679,6 +680,9 @@ P_KillMobj
+     mobjtype_t	item;
+     mobj_t*	mo;
+ 	
++    // A morte encerra a cadeia de ataque atual. Projéteis já criados guardam
++    // seu próprio neural_attack_owner_id e continuam atribuíveis.
++    target->neural_attack_active = 0;
+     target->flags &= ~(MF_SHOOTABLE|MF_FLOAT|MF_SKULLFLY);
+ 
+     if (target->type != MT_SKULL)
+@@ -796,6 +800,8 @@ P_DamageMobj
      player_t*	player;
      fixed_t	thrust;
      int		temp;
-+    int     effective_damage;
++    int		effective_damage;
++    unsigned int neural_attack_owner_id;
  	
      if ( !(target->flags & MF_SHOOTABLE) )
  	return;	// shouldn't happen...
-@@ -896,10 +898,23 @@ P_DamageMobj
+@@ -896,10 +902,40 @@ P_DamageMobj
  	    I_Tactile (40,10,40+temp*2);
      }
      
@@ -144,24 +180,41 @@ index b6e403298d71263981c4acf721c8455268abe8f1..9d28712b434129fcfc6449c61e139e0e
 +    if (effective_damage > target->health)
 +        effective_damage = target->health;
 +
-+    if (target->player && source && damage > 0)
-+        NAI_ReportCombatEvent(source, NAI_EVENT_PLAYER_DAMAGE, damage);
-+    if (target->neural_controlled && effective_damage > 0)
++    neural_attack_owner_id = 0;
++    if (target->player && inflictor != NULL)
++    {
++        if (inflictor == source && source != NULL
++            && source->neural_evaluation_member
++            && source->neural_attack_active)
++            neural_attack_owner_id = source->neural_instance_id;
++        else
++            neural_attack_owner_id = inflictor->neural_attack_owner_id;
++    }
++
++    if (effective_damage < 0)
++        effective_damage = 0;
++    if (target->player && neural_attack_owner_id != 0
++        && effective_damage > 0)
++        NAI_ReportCombatEventByInstanceId(neural_attack_owner_id,
++                                         NAI_EVENT_PLAYER_DAMAGE,
++                                         effective_damage);
++    if (target->neural_evaluation_member && effective_damage > 0)
 +        NAI_ReportCombatEvent(target, NAI_EVENT_NPC_DAMAGE, effective_damage);
 +
      // do the damage	
      target->health -= damage;	
      if (target->health <= 0)
      {
-+        if (target->player && source && source->neural_controlled)
-+            NAI_ReportCombatEvent(source, NAI_EVENT_PLAYER_KILL, 1);
-+        if (target->neural_controlled)
++        if (target->player && neural_attack_owner_id != 0)
++            NAI_ReportCombatEventByInstanceId(neural_attack_owner_id,
++                                              NAI_EVENT_PLAYER_KILL, 1);
++        if (target->neural_evaluation_member)
 +            NAI_ReportCombatEvent(target, NAI_EVENT_NPC_DEATH, 1);
  	P_KillMobj (source, target);
  	return;
      }
 diff --git a/src/doom/p_mobj.c b/src/doom/p_mobj.c
-index 481c52822d13ac25ffce8d4a275c22d6a65400a2..02a33525db0415156bb0507850fc60b06166d2a9 100644
+index 481c52822d13ac25ffce8d4a275c22d6a65400a2..8d3d48c767bd41aa7be6e46a3dac7f5cfb50b2b3 100644
 --- a/src/doom/p_mobj.c
 +++ b/src/doom/p_mobj.c
 @@ -24,6 +24,7 @@
@@ -198,22 +251,36 @@ index 481c52822d13ac25ffce8d4a275c22d6a65400a2..02a33525db0415156bb0507850fc60b0
      mobj->x = x;
      mobj->y = y;
      mobj->radius = info->radius;
+@@ -987,6 +1000,8 @@ P_SpawnMissile
+ 	S_StartSound (th, th->info->seesound);
+ 
+     th->target = source;	// where it came from
++    if (source->neural_evaluation_member && source->neural_attack_active)
++        th->neural_attack_owner_id = source->neural_instance_id;
+     an = R_PointToAngle2 (source->x, source->y, dest->x, dest->y);
+ 
+     // fuzzy player
 diff --git a/src/doom/p_mobj.h b/src/doom/p_mobj.h
-index 90ed764b91c7de405d2bb5a98c348ad9083645b1..b229e826f59f145fee577d6ffb3b0cbf7672075a 100644
+index 90ed764b91c7de405d2bb5a98c348ad9083645b1..eefbada01a4e2a6d90d1c48e714f32b1aabf91bc 100644
 --- a/src/doom/p_mobj.h
 +++ b/src/doom/p_mobj.h
-@@ -248,6 +248,10 @@ typedef struct mobj_s
+@@ -248,6 +248,15 @@ typedef struct mobj_s
      int			flags;
      int			health;
  
-+    // Identidade estável do ator e origem dos eventos de telemetria da IA.
++    // Identidade e telemetria do NPC; membro de avaliação persiste mesmo
++    // quando uma ação neural falha e a IA original assume o próximo tick.
 +    unsigned int	neural_instance_id;
-+    int			neural_controlled;
++    int			neural_evaluation_member;
++    // Ativo só na cadeia de ataque iniciada por uma decisão neural aceita.
++    int			neural_attack_active;
++    // Snapshot do dono neural; projéteis podem sobreviver ao ator de origem.
++    unsigned int	neural_attack_owner_id;
 +
      // Movement direction, movement generation (zig-zagging).
      int			movedir;	// 0-7
      int			movecount;	// when 0, select a new dir
-@@ -279,6 +283,7 @@ typedef struct mobj_s
+@@ -279,6 +288,7 @@ typedef struct mobj_s
      
  } mobj_t;
  
@@ -223,10 +290,10 @@ index 90ed764b91c7de405d2bb5a98c348ad9083645b1..b229e826f59f145fee577d6ffb3b0cbf
  #endif
 diff --git a/src/doom/p_neural_ai.c b/src/doom/p_neural_ai.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..1f0e297cc93f1732bc5af554fc1c3be1ff169a87
+index 0000000000000000000000000000000000000000..f20bd32d4f95f4d6a3444e629f16bbcfd0981fc0
 --- /dev/null
 +++ b/src/doom/p_neural_ai.c
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,162 @@
 +#include "doomdef.h"
 +#include "p_local.h"
 +#include "p_neural_ai.h"
@@ -366,20 +433,35 @@ index 0000000000000000000000000000000000000000..1f0e297cc93f1732bc5af554fc1c3be1
 +void NAI_ReportCombatEvent(mobj_t *actor, neural_ai_event_t event_type, int value)
 +{
 +#ifdef EMSCRIPTEN
-+    if (actor != NULL && actor->neural_controlled && value > 0)
-+        NAI_JsReportCombatEvent((int) actor->neural_instance_id, (int) event_type, value);
++    if (actor != NULL && actor->neural_evaluation_member)
++        NAI_ReportCombatEventByInstanceId(actor->neural_instance_id,
++                                          event_type, value);
 +#else
 +    (void) actor;
 +    (void) event_type;
 +    (void) value;
 +#endif
 +}
++
++void NAI_ReportCombatEventByInstanceId(unsigned int instance_id,
++                                       neural_ai_event_t event_type,
++                                       int value)
++{
++#ifdef EMSCRIPTEN
++    if (instance_id != 0 && value > 0)
++        NAI_JsReportCombatEvent((int) instance_id, (int) event_type, value);
++#else
++    (void) instance_id;
++    (void) event_type;
++    (void) value;
++#endif
++}
 diff --git a/src/doom/p_neural_ai.h b/src/doom/p_neural_ai.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..04bd45e6e5cb345062e03c5d52ba639802029428
+index 0000000000000000000000000000000000000000..ff7da44a789558a5ef708175e490a3b8daca25bd
 --- /dev/null
 +++ b/src/doom/p_neural_ai.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,38 @@
 +#ifndef DOOM_P_NEURAL_AI_H
 +#define DOOM_P_NEURAL_AI_H
 +
@@ -413,18 +495,23 @@ index 0000000000000000000000000000000000000000..04bd45e6e5cb345062e03c5d52ba6398
 +neural_ai_action_t NAI_RequestDecision(mobj_t *actor);
 +void NAI_ReportResult(mobj_t *actor, neural_ai_action_t action, boolean applied);
 +void NAI_ReportCombatEvent(mobj_t *actor, neural_ai_event_t event_type, int value);
++void NAI_ReportCombatEventByInstanceId(unsigned int instance_id,
++                                       neural_ai_event_t event_type,
++                                       int value);
 +
 +#endif
 diff --git a/src/doom/p_saveg.c b/src/doom/p_saveg.c
-index 1192bff90bb1145690b54e0b73f40ba86b6e117d..7b0eb2e73c4172dc68c7c1334ebbcaaa92580d44 100644
+index 1192bff90bb1145690b54e0b73f40ba86b6e117d..924547a627fe4e911c80b545654a3ab9a4612037 100644
 --- a/src/doom/p_saveg.c
 +++ b/src/doom/p_saveg.c
-@@ -1649,6 +1649,9 @@ void P_UnArchiveThinkers (void)
+@@ -1649,6 +1649,11 @@ void P_UnArchiveThinkers (void)
  	    saveg_read_pad();
  	    mobj = Z_Malloc (sizeof(*mobj), PU_LEVEL, NULL);
              saveg_read_mobj_t(mobj);
 +            mobj->neural_instance_id = 0;
-+            mobj->neural_controlled = 0;
++            mobj->neural_evaluation_member = 0;
++            mobj->neural_attack_active = 0;
++            mobj->neural_attack_owner_id = 0;
 +            P_AssignNeuralInstanceId(mobj);
  
  	    mobj->target = NULL;
