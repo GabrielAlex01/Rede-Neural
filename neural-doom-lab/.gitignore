@@ -24,6 +24,7 @@ venv/
 
 # Arquivos locais
 .env*
+.runtime/
 .vscode/
 .idea/
 *.log
