@@ -57,7 +57,8 @@ BEGIN
                 100, 100, 512, 1, 0,
                 v_run_id, v_action, v_confidence
             );
-            IF v_run_id IS NULL OR v_action NOT IN ('IDLE', 'CHASE', 'ATTACK', 'FLEE') THEN
+            IF v_run_id IS NULL OR v_action IS NULL
+               OR v_action NOT IN ('IDLE', 'CHASE', 'ATTACK', 'FLEE') THEN
                 SIGNAL SQLSTATE '45001'
                     SET MESSAGE_TEXT = 'Decisão SQL sintética para atribuição v2 falhou';
             END IF;
