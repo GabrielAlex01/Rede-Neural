@@ -10,6 +10,7 @@ BEGIN
     DECLARE v_unregistered_session_id CHAR(36) DEFAULT UUID();
     DECLARE v_ack_token CHAR(36) DEFAULT NULL;
     DECLARE v_ack_token_retry CHAR(36) DEFAULT NULL;
+    DECLARE v_unregistered_ack CHAR(36) DEFAULT 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     DECLARE v_wrong_ack_rejected INT DEFAULT 0;
     DECLARE v_registration_retroactive_rejected INT DEFAULT 0;
     DECLARE v_fitness DECIMAL(14,4) DEFAULT NULL;
@@ -111,7 +112,7 @@ BEGIN
         session_id, engine_npc_id, npc_type, genome_id, max_health, last_health
     ) VALUES (v_unregistered_session_id, 'training-retroactive-sql-fixture', 1, v_genome_id, 100, 100);
     CALL sp_nn_mark_session_v2(v_unregistered_session_id);
-    CALL sp_nn_finish_session_v2(v_unregistered_session_id);
+    CALL sp_nn_finish_session_training_v2(v_unregistered_session_id, v_unregistered_ack);
     BEGIN
         DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET v_registration_retroactive_rejected = 1;
         CALL sp_nn_register_training_session_v2(v_unregistered_session_id);
@@ -121,7 +122,8 @@ BEGIN
     FROM nn_genome_evaluation_training_v2
     WHERE session_id = v_unregistered_session_id;
 
-    IF v_ack_confirmed <> 1 OR v_registration_retroactive_rejected <> 1
+    IF v_unregistered_ack IS NOT NULL
+       OR v_ack_confirmed <> 1 OR v_registration_retroactive_rejected <> 1
        OR v_training_rows <> 0 THEN
         SIGNAL SQLSTATE '45001'
             SET MESSAGE_TEXT = 'ACK válido ou proteção contra classificação retroativa falhou';

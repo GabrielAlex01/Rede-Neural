@@ -120,13 +120,14 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sessão sem NPCs atribuídos a genomas';
     END IF;
 
-    SELECT MAX(fitness_version) INTO v_registration_version
+    -- INSERT IGNORE makes simultaneous first decisions for one session
+    -- idempotent; a SELECT-then-INSERT sequence could race on the PK.
+    INSERT IGNORE INTO nn_training_session_registration_v2 (session_id, fitness_version)
+    VALUES (p_session_id, 'combat_outcome_v2_1');
+    SELECT fitness_version INTO v_registration_version
     FROM nn_training_session_registration_v2
     WHERE session_id = p_session_id;
-    IF v_registration_version IS NULL THEN
-        INSERT INTO nn_training_session_registration_v2 (session_id, fitness_version)
-        VALUES (p_session_id, 'combat_outcome_v2_1');
-    ELSEIF v_registration_version <> 'combat_outcome_v2_1' THEN
+    IF v_registration_version <> 'combat_outcome_v2_1' THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT = 'Sessão já registrada em outra versão de fitness';
     END IF;
@@ -140,7 +141,9 @@ CREATE PROCEDURE sp_nn_finish_session_training_v2(
 BEGIN
     finish_training_session: BEGIN
         DECLARE v_session_count INT DEFAULT 0;
+        DECLARE v_session_ended TIMESTAMP DEFAULT NULL;
         DECLARE v_existing_ack CHAR(36) DEFAULT NULL;
+        DECLARE v_proposed_ack CHAR(36) DEFAULT NULL;
         DECLARE v_registered_version VARCHAR(40) DEFAULT NULL;
         DECLARE v_invalid_evaluation_count INT DEFAULT 0;
         DECLARE v_evaluation_count INT DEFAULT 0;
@@ -169,21 +172,29 @@ BEGIN
             LEAVE finish_training_session;
         END IF;
 
+        SELECT COUNT(*), MAX(encerrada_em)
+          INTO v_session_count, v_session_ended
+        FROM nn_engine_session
+        WHERE session_id = p_session_id;
+        IF v_session_count = 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sessão não encontrada';
+        END IF;
+
         SELECT MAX(fitness_version) INTO v_registered_version
         FROM nn_training_session_registration_v2
         WHERE session_id = p_session_id;
         IF v_registered_version IS NULL THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Sessão não foi registrada antes do encerramento; avaliação retroativa recusada';
+            -- Preserve ordinary v2 session closure. It does not enter the
+            -- training tables or receive an ACK token, so old sessions are
+            -- never retroactively trusted for genetic selection.
+            IF v_session_ended IS NULL THEN
+                CALL sp_nn_finish_session_v2(p_session_id);
+            END IF;
+            SET p_ack_token = NULL;
+            LEAVE finish_training_session;
         END IF;
         IF v_registered_version <> 'combat_outcome_v2_1' THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Versão de fitness da sessão incompatível';
-        END IF;
-
-        SELECT COUNT(*) INTO v_session_count
-        FROM nn_engine_session WHERE session_id = p_session_id;
-        IF v_session_count = 0 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Sessão não encontrada';
         END IF;
 
         -- The existing evaluator owns its own transaction. It is safe to call
@@ -249,12 +260,17 @@ BEGIN
                 SET MESSAGE_TEXT = 'Sessão não produziu avaliação de treinamento v2';
         END IF;
 
-        SET p_ack_token = UUID();
+        SET v_proposed_ack = UUID();
         INSERT INTO nn_training_session_completion_v2 (
             session_id, ack_token, fitness_version, evaluation_count
         ) VALUES (
-            p_session_id, p_ack_token, 'combat_outcome_v2_1', v_evaluation_count
-        );
+            p_session_id, v_proposed_ack, 'combat_outcome_v2_1', v_evaluation_count
+        ) ON DUPLICATE KEY UPDATE session_id = VALUES(session_id);
+        -- A locking read returns the one token shared by concurrent retries.
+        SELECT ack_token INTO p_ack_token
+        FROM nn_training_session_completion_v2
+        WHERE session_id = p_session_id
+        FOR UPDATE;
         COMMIT;
     END finish_training_session;
 END$$
