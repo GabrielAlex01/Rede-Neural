@@ -422,6 +422,24 @@ function connectAiBackend() {
         if (response.session_id === state.sessionId && response.action_metrics) {
           updateAiMetricsDisplay(response.action_metrics);
         }
+        if (response.closed === true && typeof response.ack_token === 'string') {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+              type: 'session_end_ack_receipt',
+              session_id: response.session_id,
+              ack_token: response.ack_token,
+            }));
+          } else {
+            appendLog('error', '[AI BRIDGE] conexão fechou antes da confirmação do ACK de treinamento.');
+          }
+        }
+        return;
+      }
+
+      if (response.type === 'session_end_ack_receipt_ack') {
+        if (response.confirmed === false) {
+          appendLog('error', '[AI BRIDGE] MySQL não confirmou o recebimento do ACK de treinamento.');
+        }
         return;
       }
 
@@ -519,12 +537,25 @@ async function finishAiSession() {
     }
     if (socket?.readyState === WebSocket.OPEN) {
       closed = await new Promise((resolve) => {
-        const timeout = window.setTimeout(() => finish(false), 2500);
+        let awaitingReceipt = false;
+        const timeout = window.setTimeout(() => finish(false), 4500);
         const onMessage = (event) => {
           try {
             const response = JSON.parse(event.data);
             if (response.type === 'session_end_ack' && response.session_id === sessionId) {
-              finish(response.closed === true);
+              if (response.closed !== true) {
+                finish(false);
+              } else if (typeof response.ack_token === 'string') {
+                awaitingReceipt = true;
+              } else {
+                finish(true);
+              }
+            } else if (
+              response.type === 'session_end_ack_receipt_ack'
+              && response.session_id === sessionId
+              && awaitingReceipt
+            ) {
+              finish(response.confirmed === true);
             }
           } catch {
             // The ordinary WebSocket handler logs malformed payloads.

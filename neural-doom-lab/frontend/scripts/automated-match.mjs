@@ -27,9 +27,11 @@ const actions = {};
 const responseLatencies = [];
 const telemetryTypes = {};
 const pageErrors = [];
+const httpErrors = [];
 let npcStateRequests = 0;
 let sessionId = null;
 let sessionAck = null;
+let sessionReceiptAck = null;
 let engineName = null;
 
 function parseFrame(payload) {
@@ -65,8 +67,15 @@ try {
     };
   }, process.env.DOOM_WS_URL ?? null);
   page.on('pageerror', (error) => pageErrors.push(String(error)));
+  page.on('response', (response) => {
+    if (response.status() >= 400) {
+      httpErrors.push({ status: response.status(), url: response.url() });
+    }
+  });
   page.on('console', (message) => {
-    if (message.type() === 'error') pageErrors.push(message.text());
+    if (message.type() === 'error') {
+      pageErrors.push({ text: message.text(), location: message.location() });
+    }
   });
   page.on('websocket', (socket) => {
     if (!socket.url().endsWith('/ws/ai')) return;
@@ -92,6 +101,8 @@ try {
         if (message.action) actions[message.action] = (actions[message.action] ?? 0) + 1;
       } else if (message.type === 'session_end_ack') {
         sessionAck = message;
+      } else if (message.type === 'session_end_ack_receipt_ack') {
+        sessionReceiptAck = message;
       }
     });
   });
@@ -114,6 +125,17 @@ try {
   await page.waitForTimeout(250);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(500);
+  const closeDeadline = Date.now() + 7000;
+  while (Date.now() < closeDeadline && !sessionAck) {
+    await page.waitForTimeout(50);
+  }
+  while (
+    Date.now() < closeDeadline
+    && sessionAck?.ack_token
+    && !sessionReceiptAck
+  ) {
+    await page.waitForTimeout(50);
+  }
   await page.keyboard.press('ArrowUp');
   await page.waitForTimeout(300);
   await page.keyboard.press('ArrowUp');
@@ -179,6 +201,7 @@ try {
       count: responseLatencies.length,
       mean: responseLatencies.reduce((sum, value) => sum + value, 0) / responseLatencies.length,
       p95: [...responseLatencies].sort((a, b) => a - b)[Math.ceil(responseLatencies.length * 0.95) - 1],
+      samples: responseLatencies.map((value) => Number(value.toFixed(3))),
     } : null,
     combat_events_sent: telemetryTypes,
     metrics_before_session_close: metricsBeforeClose,
@@ -186,17 +209,24 @@ try {
     session_end_ack: sessionAck ? {
       closed: sessionAck.closed,
       session_id: sessionAck.session_id,
+      training_evaluation_complete: sessionAck.training_evaluation_complete,
       action_metrics: sessionAck.action_metrics,
+    } : null,
+    session_end_ack_receipt: sessionReceiptAck ? {
+      confirmed: sessionReceiptAck.confirmed,
+      session_id: sessionReceiptAck.session_id,
     } : null,
     engine_start_log: gameLogStart.includes('Engine initialized successfully.'),
     screenshot: canvasPath,
     browser_errors: pageErrors,
+    http_errors: httpErrors,
   };
   const resultPath = path.join(outputDirectory, `${runId}.json`);
   await writeFile(resultPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify({ result_path: resultPath, ...record }, null, 2)}\n`);
 
   if (!sessionAck?.closed) process.exitCode = 2;
+  if (sessionAck?.training_evaluation_complete && !sessionReceiptAck?.confirmed) process.exitCode = 4;
   if (record.decisions_received === 0) process.exitCode = 3;
 } finally {
   await browser.close();

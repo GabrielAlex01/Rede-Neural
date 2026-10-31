@@ -27,7 +27,8 @@ class ConnectionPool(Protocol):
 class DecisionService(Protocol):
     def decide(self, session_id: Any, npc: Any) -> dict[str, Any]: ...
     def record_combat_event(self, session_id: Any, event: Any) -> None: ...
-    def close_session(self, session_id: Any) -> None: ...
+    def close_session(self, session_id: Any) -> str | None: ...
+    def confirm_training_ack(self, session_id: Any, ack_token: Any) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,8 @@ class DatabaseDecisionService:
     def __init__(self, pool: ConnectionPool | None = None, architecture_name: str | None = None):
         self._pool = pool
         self._pool_lock = threading.Lock()
+        self._training_sessions_lock = threading.Lock()
+        self._training_sessions: dict[str, None] = {}
         selected_architecture = architecture_name or os.environ.get("NN_ARCHITECTURE_NAME")
         self._architecture_name = selected_architecture.strip() if selected_architecture else None
         if self._architecture_name == "":
@@ -178,6 +181,17 @@ class DatabaseDecisionService:
                 procedure = "sp_nn_decide"
             result = cursor.callproc(procedure, parameters)
             cursor.callproc("sp_nn_mark_session_v2", (canonical_session_id,))
+            with self._training_sessions_lock:
+                if canonical_session_id not in self._training_sessions:
+                    cursor.callproc(
+                        "sp_nn_register_training_session_v2",
+                        (canonical_session_id,),
+                    )
+                    connection.commit()
+                    self._training_sessions[canonical_session_id] = None
+                    if len(self._training_sessions) > 512:
+                        oldest_session = next(iter(self._training_sessions))
+                        self._training_sessions.pop(oldest_session, None)
             connection.commit()
         except InvalidRequest:
             raise
@@ -253,7 +267,7 @@ class DatabaseDecisionService:
             if connection is not None:
                 connection.close()
 
-    def close_session(self, session_id: Any) -> None:
+    def close_session(self, session_id: Any) -> str | None:
         try:
             canonical_session_id = str(uuid.UUID(session_id))
         except (ValueError, TypeError, AttributeError) as exc:
@@ -264,8 +278,15 @@ class DatabaseDecisionService:
         try:
             connection = self._get_pool().get_connection()
             cursor = connection.cursor()
-            cursor.callproc("sp_nn_finish_session_v2", (canonical_session_id,))
+            result = cursor.callproc(
+                "sp_nn_finish_session_training_v2",
+                (canonical_session_id, None),
+            )
             connection.commit()
+            ack_token = result[-1] if result else None
+            with self._training_sessions_lock:
+                self._training_sessions.pop(canonical_session_id, None)
+            return str(ack_token) if ack_token is not None else None
         except Exception as exc:
             if connection is not None:
                 try:
@@ -273,6 +294,36 @@ class DatabaseDecisionService:
                 except Exception:
                     pass
             raise DecisionError("O encerramento da sessão MySQL falhou") from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
+
+    def confirm_training_ack(self, session_id: Any, ack_token: Any) -> None:
+        try:
+            canonical_session_id = str(uuid.UUID(session_id))
+            canonical_ack_token = str(uuid.UUID(ack_token))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise InvalidRequest("ID da sessão ou token de ACK inválido") from exc
+
+        connection = None
+        cursor = None
+        try:
+            connection = self._get_pool().get_connection()
+            cursor = connection.cursor()
+            cursor.callproc(
+                "sp_nn_confirm_training_ack_v2",
+                (canonical_session_id, canonical_ack_token),
+            )
+            connection.commit()
+        except Exception as exc:
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+            raise DecisionError("A confirmação de ACK de treinamento falhou") from exc
         finally:
             if cursor is not None:
                 cursor.close()

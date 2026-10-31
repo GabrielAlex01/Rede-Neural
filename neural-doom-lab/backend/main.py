@@ -112,8 +112,9 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                     continue
 
                 if message.get("type") == "session_end":
+                    ack_token = None
                     try:
-                        await asyncio.wait_for(
+                        ack_token = await asyncio.wait_for(
                             asyncio.to_thread(
                                 app.state.decision_service.close_session,
                                 session_id,
@@ -132,6 +133,8 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         "type": "session_end_ack",
                         "session_id": session_id,
                         "closed": closed,
+                        "training_evaluation_complete": ack_token is not None,
+                        "ack_token": ack_token,
                         "action_metrics": metrics,
                     })
                     if closed and canonical_session_id is not None:
@@ -142,6 +145,26 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                                 format_action_metrics(metrics),
                             )
                         app.state.action_metrics.pop(canonical_session_id, None)
+                    continue
+
+                if message.get("type") == "session_end_ack_receipt":
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(
+                                app.state.decision_service.confirm_training_ack,
+                                session_id,
+                                message.get("ack_token"),
+                            ),
+                            timeout=1.5,
+                        )
+                        confirmed = True
+                    except (InvalidRequest, DecisionError, asyncio.TimeoutError):
+                        confirmed = False
+                    await websocket.send_json({
+                        "type": "session_end_ack_receipt_ack",
+                        "session_id": session_id,
+                        "confirmed": confirmed,
+                    })
                     continue
 
                 if (

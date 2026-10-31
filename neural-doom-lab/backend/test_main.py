@@ -10,6 +10,7 @@ from backend.main import create_app
 
 
 SESSION_ID = "11111111-1111-4111-8111-111111111111"
+ACK_TOKEN = "22222222-2222-4222-8222-222222222222"
 NPC = {
     "npc_id": 3052044,
     "npc_type": 12,
@@ -39,14 +40,16 @@ ACTION_METRICS = {
 
 
 class StubService:
-    def __init__(self, result=None, error=None, close_error=None, delay_seconds=0):
+    def __init__(self, result=None, error=None, close_error=None, delay_seconds=0, ack_token=ACK_TOKEN):
         self.result = result or {"run_id": 17, "action": "CHASE", "confidence": 0.75}
         self.error = error
         self.close_error = close_error
         self.delay_seconds = delay_seconds
+        self.ack_token = ack_token
         self.calls = []
         self.events = []
         self.closed_sessions = []
+        self.confirmed_acks = []
 
     def decide(self, session_id, npc):
         validate_observation(session_id, npc)
@@ -64,11 +67,16 @@ class StubService:
         if self.close_error:
             raise self.close_error
         self.closed_sessions.append(session_id)
+        return self.ack_token
+
+    def confirm_training_ack(self, session_id, ack_token):
+        self.confirmed_acks.append((session_id, ack_token))
 
 
 class FakeCursor:
-    def __init__(self, outputs):
+    def __init__(self, outputs, ack_token=ACK_TOKEN):
         self.outputs = outputs
+        self.ack_token = ack_token
         self.procedure = None
         self.parameters = None
         self.calls = []
@@ -80,6 +88,8 @@ class FakeCursor:
         self.calls.append((procedure, parameters))
         if procedure in {"sp_nn_decide", "sp_nn_decide_for_architecture"}:
             return (*parameters[:-3], *self.outputs)
+        if procedure == "sp_nn_finish_session_training_v2":
+            return (parameters[0], self.ack_token)
         return parameters
 
     def close(self):
@@ -143,6 +153,7 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertEqual(cursor.calls[0][1][1], "3052044")
         self.assertEqual(cursor.calls[0][1][4], 100)
         self.assertEqual(cursor.calls[1], ("sp_nn_mark_session_v2", (SESSION_ID,)))
+        self.assertEqual(cursor.calls[2], ("sp_nn_register_training_session_v2", (SESSION_ID,)))
         self.assertEqual(decision, {"run_id": 41, "action": "ATTACK", "confidence": 0.982})
         self.assertTrue(connection.committed)
         self.assertTrue(cursor.closed)
@@ -161,7 +172,22 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertEqual(cursor.calls[0][1][0], "npc_teste_4_64_32_64_4")
         self.assertEqual(cursor.calls[0][1][1], SESSION_ID)
         self.assertEqual(cursor.calls[1][0], "sp_nn_mark_session_v2")
+        self.assertEqual(cursor.calls[2][0], "sp_nn_register_training_session_v2")
         self.assertEqual(decision, {"run_id": 52, "action": "FLEE", "confidence": 0.81})
+
+    def test_training_session_is_registered_once_per_backend_process(self):
+        cursor = FakeCursor((52, "CHASE", 0.81))
+        connection = FakeConnection(cursor)
+        service = DatabaseDecisionService(FakePool(connection))
+
+        service.decide(SESSION_ID, NPC)
+        service.decide(SESSION_ID, NPC)
+
+        registrations = [
+            call for call in cursor.calls
+            if call[0] == "sp_nn_register_training_session_v2"
+        ]
+        self.assertEqual(len(registrations), 1)
 
     def test_invalid_mysql_action_is_rejected(self):
         cursor = FakeCursor((41, "invented", 0.5))
@@ -195,11 +221,32 @@ class DecisionServiceTests(unittest.TestCase):
         connection = FakeConnection(cursor)
         service = DatabaseDecisionService(FakePool(connection))
 
-        service.close_session(SESSION_ID)
+        ack_token = service.close_session(SESSION_ID)
 
-        self.assertEqual(cursor.procedure, "sp_nn_finish_session_v2")
-        self.assertEqual(cursor.parameters[0], SESSION_ID)
+        self.assertEqual(cursor.procedure, "sp_nn_finish_session_training_v2")
+        self.assertEqual(cursor.parameters, (SESSION_ID, None))
+        self.assertEqual(ack_token, ACK_TOKEN)
         self.assertTrue(connection.committed)
+
+    def test_ack_receipt_is_sent_to_mysql_procedure(self):
+        cursor = FakeCursor(())
+        connection = FakeConnection(cursor)
+        service = DatabaseDecisionService(FakePool(connection))
+
+        service.confirm_training_ack(SESSION_ID, ACK_TOKEN)
+
+        self.assertEqual(cursor.procedure, "sp_nn_confirm_training_ack_v2")
+        self.assertEqual(cursor.parameters, (SESSION_ID, ACK_TOKEN))
+        self.assertTrue(connection.committed)
+
+    def test_malformed_ack_token_is_rejected_before_mysql(self):
+        cursor = FakeCursor(())
+        service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
+
+        with self.assertRaises(ValueError):
+            service.confirm_training_ack(SESSION_ID, "not-a-uuid")
+
+        self.assertEqual(cursor.calls, [])
 
 
 class WebSocketBridgeTests(unittest.TestCase):
@@ -291,12 +338,22 @@ class WebSocketBridgeTests(unittest.TestCase):
             event_response = websocket.receive_json()
             websocket.send_json({"type": "session_end", "session_id": SESSION_ID})
             session_response = websocket.receive_json()
+            websocket.send_json({
+                "type": "session_end_ack_receipt",
+                "session_id": SESSION_ID,
+                "ack_token": session_response["ack_token"],
+            })
+            receipt_response = websocket.receive_json()
 
         self.assertTrue(event_response["stored"])
         self.assertEqual(service.events, [(SESSION_ID, event)])
         self.assertTrue(session_response["closed"])
+        self.assertTrue(session_response["training_evaluation_complete"])
+        self.assertEqual(session_response["ack_token"], ACK_TOKEN)
         self.assertEqual(session_response["session_id"], SESSION_ID)
         self.assertEqual(service.closed_sessions, [SESSION_ID])
+        self.assertTrue(receipt_response["confirmed"])
+        self.assertEqual(service.confirmed_acks, [(SESSION_ID, ACK_TOKEN)])
 
     def test_session_end_is_not_acknowledged_closed_when_mysql_rejects_it(self):
         service = StubService(close_error=DecisionError("session missing"))
@@ -307,6 +364,7 @@ class WebSocketBridgeTests(unittest.TestCase):
             response = websocket.receive_json()
 
         self.assertFalse(response["closed"])
+        self.assertIsNone(response["ack_token"])
         self.assertEqual(response["session_id"], SESSION_ID)
         self.assertEqual(service.closed_sessions, [])
 
@@ -324,10 +382,17 @@ class WebSocketBridgeTests(unittest.TestCase):
             metrics_ack = websocket.receive_json()
             websocket.send_json({"type": "session_end", "session_id": SESSION_ID})
             end_ack = websocket.receive_json()
+            websocket.send_json({
+                "type": "session_end_ack_receipt",
+                "session_id": SESSION_ID,
+                "ack_token": end_ack["ack_token"],
+            })
+            receipt_ack = websocket.receive_json()
 
         self.assertTrue(metrics_ack["accepted"])
         self.assertEqual(end_ack["action_metrics"], ACTION_METRICS)
         self.assertTrue(end_ack["closed"])
+        self.assertTrue(receipt_ack["confirmed"])
         self.assertNotIn(SESSION_ID, app.state.action_metrics)
 
     def test_action_metrics_reject_inconsistent_and_stale_snapshots(self):
