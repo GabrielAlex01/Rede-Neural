@@ -12,84 +12,40 @@ Freedoom 2 no navegador com NPCs que recebem decisões calculadas por uma MLP no
 
 ## Requisitos
 
-- Windows 10/11, MySQL Server 8.0+ e MySQL Workbench 8.0+.
-- Python 3.10+ e Node.js/npm.
-- O bundle inclui Freedoom 2. Não use nem distribua IWADs proprietários.
+Para executar no Windows: MySQL Server 8.0.46, Python 3.10+, Node.js/npm. A configuração testada foi Windows 11, MySQL 8.0.46, Python 3.14.2 e Node.js 24.19.0. MySQL Workbench é opcional para administração.
 
-## Banco pelo MySQL Workbench
+O clone inclui os arquivos de execução do Chocolate Doom/WASM e Freedoom 2 em `.data`; o computador que só joga não precisa de EMScripten, CMake, Ninja, compilador C nem WAD separado. Esses itens são necessários apenas para reconstruir o engine; consulte [`engine/README.md`](engine/README.md).
 
-O Workbench administra o servidor; é o MySQL Server que executa as procedures e a rede neural. No Windows, use a conexão local já configurada para o serviço `MySQL80` (`127.0.0.1`, porta `3306`). Confira no editor do Workbench, sem alterar conexões ou credenciais salvas:
+## Instalação reproduzível no Windows
 
-```sql
-SELECT VERSION() AS mysql_version, @@port AS mysql_port;
+Instale MySQL Server 8.0.46, Python e Node.js. Crie um login-path local para uma conta administrativa; `mysql_config_editor` solicita a senha de forma interativa:
+
+```powershell
+$mysqlBin = "$env:ProgramFiles\MySQL\MySQL Server 8.0\bin"
+& "$mysqlBin\mysql_config_editor.exe" set `
+  --login-path=neural-doom-installer-20261024 `
+  --host=127.0.0.1 --port=3306 --user=root --password
 ```
 
-Não use a instância `MySQL84` na porta `3307` para esta configuração. Os nomes dos dois bootstraps existentes são fixos: `database/00_create_database.sql` seleciona `npc_neural_game`, e `database/tests/00_create_test_database.sql` seleciona `npc_neural_game_test`. Para preservar qualquer schema existente, **não execute esses dois arquivos**. Crie schemas locais novos e exclusivos pelo Workbench.
-
-Primeiro verifique que os nomes escolhidos ainda não existem. Se qualquer consulta retornar linha, não reutilize aquele schema: escolha um nome novo. Exemplo para esta configuração:
-
-```sql
-SELECT SCHEMA_NAME
-FROM INFORMATION_SCHEMA.SCHEMATA
-WHERE SCHEMA_NAME IN (
-    'neural_doom_local_game_20261024',
-    'neural_doom_local_sql_test_20261024'
-);
-```
-
-Somente se o resultado estiver vazio, crie os dois schemas:
-
-```sql
-CREATE DATABASE `neural_doom_local_game_20261024`
-    CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE `neural_doom_local_sql_test_20261024`
-    CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-No Workbench, defina `neural_doom_local_game_20261024` como schema padrão e execute os arquivos da raiz nesta ordem: `database/schema.sql`, `database/02_io_mapping.sql`, `database/03_seed_architecture.sql`, `database/04_genome_initialization.sql`, `database/05_neural_inference.sql`, `database/06_combat_telemetry.sql`, `database/07_genetic_evolution.sql`, `database/08_configurable_architectures.sql` e `database/09_training_experiments.sql`. Depois de criar as tabelas do experimento, execute novamente o `database/05_neural_inference.sql` atualizado para instalar a associação automática das sessões. Em schema já instalado, não repita `schema.sql`; execute os scripts atualizados `04_genome_initialization.sql`, `07_genetic_evolution.sql`, `08_configurable_architectures.sql`, `09_training_experiments.sql` e, por último, `05_neural_inference.sql`.
-
-Para manter a arquitetura original, crie a população de referência uma única vez, por exemplo:
-
-```sql
-CALL sp_nn_create_initial_population('npc_teste_4_6_4', 8);
-```
-
-Para os testes SQL, use um schema de teste novo e vazio, instale nele os nove scripts de base e reaplique o `05_neural_inference.sql` atualizado; **não crie população antes da suíte**. Execute `database/tests/01_assert_architecture.sql` até `10_finish_session_requires_persisted_evaluation.sql` em ordem. A suíte grava fixtures e avaliações sintéticas; nunca deve rodar no schema de jogo. No schema de teste local já preenchido, não reaplique testes não idempotentes. Para uma suíte limpa, crie outro schema de teste isolado; não apague nem reutilize schemas existentes. Os testes 06–07 usam arquiteturas próprias, mas também acrescentam dados ao schema selecionado. O teste 10 pode ser repetido e deixa apenas uma sessão vazia de fixture no schema de teste.
-
-Crie uma conta de aplicação local pelo painel **Administration → Users and Privileges** do Workbench, com uma senha escolhida localmente, host `127.0.0.1` e permissão `EXECUTE` somente no schema de jogo acima. Não compartilhe a senha nem coloque-a em comandos, logs ou commits. A conta administrativa usada para instalar e evoluir o banco deve permanecer separada da conta do backend.
-
-## Configurar e iniciar
-
-Instale as dependências:
+Na raiz do clone, rode:
 
 ```powershell
 cd neural-doom-lab
-if (-not (Test-Path .\.venv\Scripts\python.exe)) { python -m venv .venv }
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements-test.txt
-cd frontend
-npm install
+.\scripts\setup.ps1 -Mode Windows
 ```
 
-Preencha `backend/.env` com a conta de aplicação criada no Workbench. O arquivo local já tem host `127.0.0.1`, porta `3306` e o nome do schema de jogo ilustrativo; informe o usuário e a senha somente no arquivo local, que é ignorado pelo Git. Não copie credenciais do Workbench nem as envie no chat. A conta do backend precisa executar `sp_nn_decide`, `sp_nn_decide_for_architecture`, `sp_nn_record_combat_event` e `sp_nn_finish_session`.
-
-Terminal 1, na pasta `neural-doom-lab`:
+O script instala schemas exclusivos, migrations, população demo, fixtures SQL no schema de testes e dependências, e inicia MySQL bridge/FastAPI/frontend. Gera a configuração privada em `backend/.env`, ignorada pelo Git. Se os schemas `neural_doom_local_game_20261024` ou `neural_doom_local_sql_test_20261024` já existirem sem o ledger desta instalação, o setup para sem adotá-los nem apagá-los.
 
 ```powershell
-$env:NN_ARCHITECTURE_NAME = 'auto_20261025_h64'
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+.\scripts\doctor.ps1 -Mode Windows
+.\scripts\test.ps1 -Mode Windows
+.\scripts\test.ps1 -Mode Windows -IncludeHeadlessMatch
+.\scripts\stop.ps1 -Mode Windows
 ```
 
-Esse override seleciona a arquitetura `4 → 64 → 4`. No banco atual, a geração mais recente dela é a 1; a procedure distribui seus quatro genomas pelos NPCs em ordem de fitness e grava a associação por NPC na sessão. O comando não altera o `.env`, os pesos ou outras experiências. Use o Python do `.venv` para que o driver MySQL esteja disponível.
+Para Docker Compose, quando o daemon estiver ativo, use `setup.ps1`, `doctor.ps1`, `test.ps1` e `stop.ps1` com `-Mode Docker`. Os dados ficam no volume persistente `mysql_data`; não use `down -v` para parar os serviços.
 
-Terminal 2:
-
-```powershell
-cd neural-doom-lab/frontend
-npm run dev
-```
-
-Abra a URL local impressa pelo Vite. A verificação HTTP do backend fica em `http://127.0.0.1:8000/health`.
+O procedimento detalhado para MySQL Workbench, instalação segura, uso pela rede local e transferência por Git bundle está em [`docs/portabilidade-windows.md`](docs/portabilidade-windows.md).
 
 ## Jogar contra os NPCs
 
