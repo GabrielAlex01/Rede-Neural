@@ -162,6 +162,22 @@ Os resultados reais obtidos em 25/10/2026, incluindo limitações de amostra e a
 
 Configure `NN_ARCHITECTURE_NAME` com o nome do experimento no backend de avaliação. As sessões ficam associadas automaticamente ao experimento. A evolução `sp_nn_evolve_training_experiment` recusa avançar enquanto faltar qualquer avaliação prevista. `database/modelagem.md` documenta a preparação, as consultas e as condições de comparação.
 
+## Evolução genética v2
+
+O fluxo v2 usa apenas sessões reais registradas e avaliações cuja confirmação de ACK foi persistida no MySQL. A migration 15 seleciona e cruza genomas sem alterar o fitness legado; a migration 16 distribui rosters curtos entre os genomas menos avaliados. As migrations 14–16 e as fixtures SQL continuam isoladas dos experimentos reais.
+
+Para preparar e executar as quatro topologias prioritárias no Windows sem abrir janelas de navegador:
+
+```powershell
+cd C:\Users\victo\Rede-Neural-work\neural-doom-lab\frontend
+node scripts/run-genetic-experiments-v2.mjs --prepare-only
+node scripts/run-genetic-experiments-v2.mjs
+```
+
+O runner usa Edge headless, MySQL local e FastAPI temporário na porta 8001; a configuração privada do FastAPI permanece em `backend/.env`. Cada geração exige duas avaliações ACK-confirmadas por genoma. `--prepare-only` não inicia partidas. Os JSONs e screenshots ficam em `%TEMP%\neural-doom-genetic-experiments-v2`.
+
+Os resultados medidos, as ações aplicadas/rejeitadas, latência e limites de interpretação estão em [`docs/experimentos-geneticos-v2-2026-10-31.md`](docs/experimentos-geneticos-v2-2026-10-31.md). A comparação é exploratória: o seed aleatório do Freedoom não pode ser fixado pelo bundle, e nenhuma partida humana foi validada nesta etapa.
+
 O engine envia quatro observações reais. Arquiteturas `12→…` e `16→…` não são habilitadas até que novas entradas sejam instrumentadas e validadas no DOOM. O limite atual é 512 neurônios por camada e 120000 pesos+biases. Mais parâmetros aumentam o custo MySQL e não significam comportamento melhor. Testes de topologia, sementes e evolução usam fixtures e não são evidência de treinamento real.
 
 ## Consultar inferência e combate

@@ -28,6 +28,8 @@ Depois de instalar os scripts base, execute `database/migrations/12_attack_prove
 
 O engine corrigido envia `attribution_version=neural_attack_provenance_v2`. O backend rejeita observações sem esse marcador, para que um bundle antigo não seja avaliado como se tivesse proveniência de ataque. No fechamento, `sp_nn_finish_session_training_v2` retorna um token apenas para sessões registradas antes da partida terminar; o frontend devolve o token por `session_end_ack_receipt` e o backend persiste a confirmação em `nn_training_session_completion_v2`. A evolução genética v2 deve exigir essa confirmação. As métricas de treinamento versionadas ficam em `nn_genome_evaluation_training_v2`, separadas de `nn_genome_evaluation_v2`, dos fitness legados e dos resumos antigos.
 
+Para evolução genética v2, instale também `database/migrations/14_genetic_experiments_v2.sql` e `database/migrations/15_genetic_evolution_v2.sql` nos dois schemas. A migration 16 regrava somente `sp_nn_decide_for_architecture` para distribuir rosters v2 curtos pelos genomas com menos avaliações ACK-confirmadas; a origem correspondente fica em `../../database/05_neural_inference.sql`. Ela não altera tabelas nem a seleção legada. O runner `frontend/scripts/run-genetic-experiments-v2.mjs` aplica a migration 16 quando necessário e usa o login-path instalador; a conta da aplicação continua sem privilégios de instalação.
+
 Use uma conta de administração separada no MySQL Workbench para criar schema, população e novas gerações.
 
 ## Executar
