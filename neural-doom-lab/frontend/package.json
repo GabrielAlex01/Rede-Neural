@@ -6,7 +6,7 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "test": "node --test src/ai-metrics.test.js",
+    "test": "node --test src/ai-metrics.test.js src/ai-url.test.js",
     "test:match": "node scripts/automated-match.mjs",
     "test:experiments": "node scripts/run-architecture-experiments.mjs"
   },

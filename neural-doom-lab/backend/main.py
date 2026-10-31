@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
 from backend.action_metrics import (
     InvalidActionMetrics,
@@ -35,6 +35,12 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        check_database = getattr(app.state.decision_service, "check_health", None)
+        if check_database is not None:
+            try:
+                await asyncio.wait_for(asyncio.to_thread(check_database), timeout=4.0)
+            except (DecisionError, asyncio.TimeoutError):
+                raise HTTPException(status_code=503, detail="mysql_unavailable") from None
         return {"status": "ok", "decision_source": "mysql"}
 
     @app.websocket("/ws/ai")

@@ -1,4 +1,5 @@
 import './styles.css';
+import { resolveAiWebSocketUrl } from './ai-url.js';
 import {
   createAiMetrics,
   formatAiMetrics,
@@ -16,7 +17,10 @@ const DEFAULT_IWAD_PATH = '/iwads/freedoom2.wad';
 const DEFAULT_IWAD_NAME = 'freedoom2.wad';
 const ENGINE_MODULE_URL = `${import.meta.env.BASE_URL}engine/chocolate-doom.js`;
 const ENGINE_FILE_BASE = `${import.meta.env.BASE_URL}engine/`;
-const AI_WEBSOCKET_URL = 'ws://127.0.0.1:8000/ws/ai';
+const AI_WEBSOCKET_URL = resolveAiWebSocketUrl(
+  window.location,
+  import.meta.env.VITE_AI_WEBSOCKET_URL,
+);
 const AI_MODE = Object.freeze({ ORIGINAL_AI: 0, EXTERNAL_AI: 1 });
 const AI_ACTION = Object.freeze({
   INVALID: -1,
@@ -136,7 +140,7 @@ app.innerHTML = `
           <span class="signal-dot" aria-hidden="true"></span>
           <div><small>WebSocket bridge</small><strong id="ai-debug-backend">Disconnected</strong></div>
         </div>
-        <code>ws://127.0.0.1:8000/ws/ai</code>
+        <code>${AI_WEBSOCKET_URL}</code>
       </section>
 
       <section class="panel npc-panel" id="npc-status">

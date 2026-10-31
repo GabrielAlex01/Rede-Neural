@@ -40,16 +40,21 @@ ACTION_METRICS = {
 
 
 class StubService:
-    def __init__(self, result=None, error=None, close_error=None, delay_seconds=0, ack_token=ACK_TOKEN):
+    def __init__(self, result=None, error=None, close_error=None, delay_seconds=0, ack_token=ACK_TOKEN, health_error=None):
         self.result = result or {"run_id": 17, "action": "CHASE", "confidence": 0.75}
         self.error = error
         self.close_error = close_error
         self.delay_seconds = delay_seconds
         self.ack_token = ack_token
+        self.health_error = health_error
         self.calls = []
         self.events = []
         self.closed_sessions = []
         self.confirmed_acks = []
+
+    def check_health(self):
+        if self.health_error:
+            raise self.health_error
 
     def decide(self, session_id, npc):
         validate_observation(session_id, npc)
@@ -250,6 +255,15 @@ class DecisionServiceTests(unittest.TestCase):
 
 
 class WebSocketBridgeTests(unittest.TestCase):
+    def test_health_checks_mysql_and_does_not_expose_connection_error(self):
+        healthy = TestClient(create_app(StubService()))
+        self.assertEqual(healthy.get("/health").status_code, 200)
+
+        unavailable = TestClient(create_app(StubService(health_error=DecisionError("private connection details"))))
+        response = unavailable.get("/health")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("private connection details", response.text)
+
     def test_returns_action_and_preserves_request_and_npc_ids(self):
         service = StubService()
         client = TestClient(create_app(service))

@@ -25,6 +25,7 @@ class ConnectionPool(Protocol):
 
 
 class DecisionService(Protocol):
+    def check_health(self) -> None: ...
     def decide(self, session_id: Any, npc: Any) -> dict[str, Any]: ...
     def record_combat_event(self, session_id: Any, event: Any) -> None: ...
     def close_session(self, session_id: Any) -> str | None: ...
@@ -120,7 +121,6 @@ class DatabaseDecisionService:
     def _get_pool(self) -> ConnectionPool:
         if self._pool is not None:
             return self._pool
-
         with self._pool_lock:
             if self._pool is not None:
                 return self._pool
@@ -152,6 +152,26 @@ class DatabaseDecisionService:
                 raise DecisionError("Não foi possível inicializar o pool MySQL") from exc
 
             return self._pool
+
+    def check_health(self) -> None:
+        connection = None
+        cursor = None
+        try:
+            connection = self._get_pool().get_connection()
+            cursor = connection.cursor()
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
+            if not result or result[0] != 1:
+                raise DecisionError("MySQL não confirmou a consulta de saúde")
+        except DecisionError:
+            raise
+        except Exception as exc:
+            raise DecisionError("MySQL indisponível") from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
 
     def decide(self, session_id: Any, npc: Any) -> dict[str, Any]:
         canonical_session_id, observation = validate_observation(session_id, npc)
