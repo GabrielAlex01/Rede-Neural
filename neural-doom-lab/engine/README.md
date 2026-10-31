@@ -42,9 +42,12 @@ Com Emscripten 4.0.14 e Node.js disponíveis no `PATH`, execute:
 powershell -ExecutionPolicy Bypass -File .\engine\tests\test-neural-attack-provenance.ps1
 ```
 
-O teste compila um harness C pequeno fora do repositório e verifica os mesmos
-helpers de captura/resolução de origem usados por `P_SpawnMissile`, pelo ataque
-do Archvile e por `P_DamageMobj`. Ele cobre um projétil já criado quando o NPC
+O teste compila um harness C pequeno fora do repositório. Ele lê o header
+diretamente do patch versionado e, quando o checkout de Chocolate Doom existe,
+confere que o header compilado é idêntico. Assim pode ser executado também antes
+de baixar/clonar `engine/vendor/`. Verifica os mesmos helpers de captura/resolução
+de origem usados por `P_SpawnMissile`, pelo ataque do Archvile e por `P_DamageMobj`.
+Ele cobre um projétil já criado quando o NPC
 morre ou retorna ao fallback, além de garantir que novos ataques de fallback,
 ORIGINAL_AI, dano efetivo zero e ataques sem dono não recebam crédito neural.
 Não altera a escolha da rede, os gates do Chocolate Doom ou o comportamento de

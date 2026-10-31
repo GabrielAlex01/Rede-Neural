@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "../vendor/chocolate-doom/src/doom/p_neural_ai_provenance.h"
+#include "p_neural_ai_provenance.h"
 
 static void check(int condition, const char *message)
 {
