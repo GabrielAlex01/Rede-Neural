@@ -47,6 +47,8 @@ Para Docker Compose, quando o daemon estiver ativo, use `setup.ps1`, `doctor.ps1
 
 O procedimento detalhado para MySQL Workbench, instalação segura, uso pela rede local e transferência por Git bundle está em [`docs/portabilidade-windows.md`](docs/portabilidade-windows.md).
 
+O inventário das sete topologias testadas, a diferença entre a instalação padrão e o seed histórico opcional, os resultados reais e as consultas de camadas/pesos/genomas no Workbench estão em [`docs/arquiteturas-e-experimentos.md`](docs/arquiteturas-e-experimentos.md).
+
 ## Jogar contra os NPCs
 
 1. Confirme que o MySQL está ativo, que a população foi criada e que o backend iniciou sem erro.
@@ -93,7 +95,7 @@ O jogo não garante que todos os genomas da população apareçam em cada mapa. 
 
 ## Experimentos com redes maiores
 
-A MLP original `npc_teste_4_6_4` permanece intacta. Para preparar populações isoladas e seeds fixas para as quatro topologias prioritárias sem usar o Workbench, execute na raiz do clone:
+A MLP original `npc_teste_4_6_4` permanece intacta. Para preparar, de forma opcional, populações isoladas e seeds fixas para as sete topologias testadas sem usar o Workbench, execute na raiz do clone:
 
 ```powershell
 Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
@@ -102,7 +104,7 @@ Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
     --database=neural_doom_local_game_20261024 --batch --raw
 ```
 
-O script cria, somente se ainda não existirem, experimentos independentes `4→6→4`, `4→32→4`, `4→64→4`, `4→64→32→64→4`, `4→128→64→128→4`, `4→256→128→64→4` e `4→512→4`, cada um com população inicial de 4, seed fixa, mutação de 5%, duas gerações totais e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria a população nem altera a referência original. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos.
+O instalador limpo não executa esse seed. Ele cria as quatro experiências v2 padrão mais a população demo. O script opcional cria sete aliases legados (`auto_20261025_*`) com população inicial de 4, seed fixa, mutação de 5%, duas gerações planejadas e duas avaliações reais por genoma. Valida topologia e configuração de nomes existentes e aborta diante de conflito; não recria populações idênticas nem altera os aliases v2. A criação das redes 128 e 256 pode demorar devido ao número de pesos. O arquivo deve ser executado exclusivamente no schema de jogo indicado; ele não cria ou apaga bancos. Veja [`docs/arquiteturas-e-experimentos.md`](docs/arquiteturas-e-experimentos.md) para a situação real de cada arquitetura, resultados, limites e consultas Workbench.
 
 Com `mysql.exe`, o `login-path` local e as dependências de `frontend` instaladas, o benchmark reproduzível pode ser iniciado sem Workbench:
 

@@ -58,6 +58,8 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Mode Windows
 
 O instalador recusa qualquer um dos dois nomes de schema se já existir sem o marcador de propriedade e ledger da instalação. Ele não tenta adotar nem esvaziar schemas pré-criados manualmente. Para evitar colisão com dados já existentes, use uma instância MySQL de testes isolada; não apague ou renomeie schemas para contornar a recusa.
 
+A instalação padrão cria cinco nomes de arquitetura para quatro topologias únicas. O seed legado opcional que prepara as sete topologias e os aliases para selecioná-las está descrito em [`arquiteturas-e-experimentos.md`](arquiteturas-e-experimentos.md); ele não roda durante o setup.
+
 Para uma segunda instalação num MySQL separado/porta diferente, inicie essa instância e use, por exemplo:
 
 ```powershell
