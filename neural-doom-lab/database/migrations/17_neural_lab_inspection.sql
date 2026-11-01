@@ -46,8 +46,42 @@ BEGIN
             WHERE l.architecture_id = a.id AND l.tipo IN ('hidden', 'output')) AS bias_count,
            (SELECT COUNT(*) FROM nn_genome g WHERE g.architecture_id = a.id) AS genome_count,
            (SELECT COUNT(DISTINCT g.geracao) FROM nn_genome g WHERE g.architecture_id = a.id) AS generation_count,
-           (SELECT MAX(g.geracao) FROM nn_genome g WHERE g.architecture_id = a.id) AS latest_generation
+           (SELECT MAX(g.geracao) FROM nn_genome g WHERE g.architecture_id = a.id) AS latest_generation,
+           CASE WHEN training.experiment_count IS NOT NULL
+                THEN training.active_generation
+                ELSE (SELECT MAX(g.geracao) FROM nn_genome g WHERE g.architecture_id = a.id)
+           END AS playable_generation,
+           CASE
+             WHEN a.n_entradas <> 4 OR a.n_saidas <> 4 THEN 0
+             WHEN training.experiment_count IS NULL THEN EXISTS (
+                 SELECT 1 FROM nn_genome g
+                 WHERE g.architecture_id = a.id
+                   AND g.geracao = (SELECT MAX(latest.geracao)
+                                    FROM nn_genome latest
+                                    WHERE latest.architecture_id = a.id)
+             )
+             WHEN training.experiment_count = 1
+              AND training.evaluating_generation_count = 1
+              AND EXISTS (
+                  SELECT 1 FROM nn_training_experiment_genome_v2 member
+                  WHERE member.experiment_id = training.experiment_id
+                    AND member.generation = training.active_generation
+              ) THEN 1
+             ELSE 0
+           END AS playable
     FROM nn_architecture a
+    LEFT JOIN (
+        SELECT experiment.architecture_id,
+               COUNT(DISTINCT experiment.experiment_id) AS experiment_count,
+               MAX(experiment.experiment_id) AS experiment_id,
+               COUNT(generation.generation) AS evaluating_generation_count,
+               MAX(generation.generation) AS active_generation
+        FROM nn_training_experiment_v2 experiment
+        LEFT JOIN nn_training_generation_v2 generation
+          ON generation.experiment_id = experiment.experiment_id
+         AND generation.status = 'EVALUATING'
+        GROUP BY experiment.architecture_id
+    ) training ON training.architecture_id = a.id
     ORDER BY a.nome;
 END$$
 

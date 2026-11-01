@@ -5,7 +5,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$migrationPath = Join-Path $projectRoot 'database\migrations\17_neural_lab_inspection.sql'
+$migration17Path = Join-Path $projectRoot 'database\migrations\17_neural_lab_inspection.sql'
+$migration18Path = Join-Path $projectRoot 'database\migrations\18_neural_lab_playable_selection.sql'
 $targets = @(
     'neural_doom_local_game_20261024',
     'neural_doom_local_sql_test_20261024'
@@ -20,7 +21,8 @@ if (-not $MySqlExePath) {
     }
 }
 if (-not (Test-Path -LiteralPath $MySqlExePath)) { throw 'mysql.exe não encontrado.' }
-if (-not (Test-Path -LiteralPath $migrationPath)) { throw 'Migration 17 ausente no clone.' }
+if (-not (Test-Path -LiteralPath $migration17Path)) { throw 'Migration 17 ausente no clone.' }
+if (-not (Test-Path -LiteralPath $migration18Path)) { throw 'Migration 18 ausente no clone.' }
 if (-not $InstallerLoginPath) { throw 'Informe o login-path local do instalador.' }
 
 function Invoke-TargetQuery([string]$Schema, [string]$Query) {
@@ -33,10 +35,10 @@ function Invoke-TargetQuery([string]$Schema, [string]$Query) {
     return (($result | ForEach-Object { [string]$_ }) -join "`n").Trim()
 }
 
-function Invoke-TargetMigration([string]$Schema, [string]$Sql) {
+function Invoke-TargetMigration([string]$Schema, [string]$Sql, [int]$Version) {
     $result = $Sql | & $MySqlExePath "--login-path=$InstallerLoginPath" --protocol=TCP --host=127.0.0.1 --port=3306 --connect-timeout=5 "--database=$Schema" --batch --raw 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "Migration 17 falhou no schema $Schema. Ela pode ser reaplicada após revisão; nenhum outro schema foi selecionado."
+        throw "Migration $Version falhou no schema $Schema. Nenhum outro schema foi selecionado."
     }
     return (($result | ForEach-Object { [string]$_ }) -join "`n").Trim()
 }
@@ -69,10 +71,10 @@ foreach ($schema in $targets) {
     Write-Output "Pré-verificado: $schema (MySQL 8.0.46; migration 17 $($parts[4])/5 procedures)."
 }
 
-$migrationSql = [IO.File]::ReadAllText($migrationPath)
+$migration17Sql = [IO.File]::ReadAllText($migration17Path)
+$migration18Sql = [IO.File]::ReadAllText($migration18Path)
 foreach ($schema in $targets) {
-    Invoke-TargetMigration $schema $migrationSql | Out-Null
-    $routineCount = Invoke-TargetQuery $schema @"
+    $existingLabRoutines = Invoke-TargetQuery $schema @"
 SELECT COUNT(*) FROM information_schema.routines
 WHERE routine_schema = DATABASE() AND routine_name IN (
   'sp_nn_lab_list_architectures','sp_nn_lab_architecture_layers',
@@ -80,6 +82,19 @@ WHERE routine_schema = DATABASE() AND routine_name IN (
   'sp_nn_lab_genome_weights'
 );
 "@
-    if ($routineCount -ne '5') { throw "A migration não foi confirmada no schema $schema." }
-    Write-Output "Migration 17 instalada: $schema (somente procedures de inspeção)."
+    if ($existingLabRoutines -eq '0') {
+        Invoke-TargetMigration $schema $migration17Sql 17 | Out-Null
+        Write-Output "Migration 17 instalada: $schema (somente procedures de inspeção)."
+    }
+    Invoke-TargetMigration $schema $migration18Sql 18 | Out-Null
+    $routineCount = Invoke-TargetQuery $schema @"
+SELECT COUNT(*) FROM information_schema.routines
+WHERE routine_schema = DATABASE() AND routine_name IN (
+  'sp_nn_lab_list_architectures','sp_nn_lab_architecture_layers',
+  'sp_nn_lab_list_genomes','sp_nn_lab_run_activations',
+  'sp_nn_lab_genome_weights','sp_nn_select_session_genome_v2'
+);
+"@
+    if ($routineCount -ne '6') { throw "A migration 18 não foi confirmada no schema $schema." }
+    Write-Output "Migration 18 instalada: $schema (catálogo jogável e seleção explícita de genoma)."
 }
