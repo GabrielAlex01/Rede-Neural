@@ -96,7 +96,7 @@ try {
 
   const report = {
     result: 'PASS',
-    environment: 'Freedoom 2 E1M1, Edge headless, ORIGINAL_AI; browser requestAnimationFrame cadence is a rendering proxy, not an engine-specific FPS counter; no MySQL session or fitness evaluation was created',
+    environment: 'Freedoom 2 MAP01, Edge headless, ORIGINAL_AI; browser requestAnimationFrame cadence is a rendering proxy, not an engine-specific FPS counter; no MySQL session or fitness evaluation was created',
     panel_closed: panelClosed,
     panel_open: panelOpen,
     percentage_change: panelClosed.browser_raf_fps > 0

@@ -27,7 +27,7 @@ const report = {
   run_started_at: new Date().toISOString(),
   environment: {
     game_schema: gameSchema,
-    map: 'Freedoom 2 E1M1',
+    map: 'Freedoom 2 MAP01',
     skill: 2,
     duration_seconds: matchSeconds,
     browser: 'Microsoft Edge headless, isolated context',
