@@ -38,3 +38,21 @@ export function parseTopology(value) {
 export function formatTopology(topology) {
   return Array.isArray(topology) ? topology.join(' → ') : String(topology ?? '—');
 }
+
+export function isPlayableArchitecture(architecture) {
+  return (Number(architecture?.playable) === 1 || architecture?.playable === true)
+    && Number(architecture?.input_count) === 4
+    && Number(architecture?.output_count) === 4
+    && Number(architecture?.genome_count) > 0
+    && Number.isInteger(Number(architecture?.playable_generation));
+}
+
+export function findPlayableArchitecture(architectures, topology) {
+  const normalizedTopology = Array.isArray(topology)
+    ? topology.join('->')
+    : String(topology ?? '').replaceAll(' ', '').replaceAll('→', '->');
+  return architectures.find((architecture) => (
+    isPlayableArchitecture(architecture)
+    && String(architecture.topology).replaceAll(' ', '').replaceAll('→', '->') === normalizedTopology
+  )) ?? null;
+}

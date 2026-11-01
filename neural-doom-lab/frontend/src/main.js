@@ -1,6 +1,11 @@
 import './styles.css';
 import { resolveAiWebSocketUrl } from './ai-url.js';
-import { formatTopology, parseTopology } from './neural-lab.js';
+import {
+  findPlayableArchitecture,
+  formatTopology,
+  isPlayableArchitecture,
+  parseTopology,
+} from './neural-lab.js';
 import {
   createAiMetrics,
   formatAiMetrics,
@@ -25,6 +30,7 @@ const AI_WEBSOCKET_URL = resolveAiWebSocketUrl(
 const AI_HTTP_BASE_URL = import.meta.env.VITE_AI_HTTP_URL
   || `${window.location.protocol}//${window.location.hostname}:8000`;
 const NEURAL_LAB_STORAGE_KEY = 'neural-doom-lab.architecture';
+const NEURAL_LAB_GENOME_STORAGE_KEY = 'neural-doom-lab.game-genome';
 const AI_MODE = Object.freeze({ ORIGINAL_AI: 0, EXTERNAL_AI: 1 });
 const AI_ACTION = Object.freeze({
   INVALID: -1,
@@ -136,6 +142,7 @@ app.innerHTML = `
             <option value="local">Local mock (desenvolvimento)</option>
           </select>
         </label>
+        <p class="note">A fonte só é usada no EXTERNAL_AI; ORIGINAL_AI continua no engine original.</p>
       </section>
 
       <section class="panel connection-panel">
@@ -161,11 +168,11 @@ app.innerHTML = `
       <section class="utility-panel controls-panel" id="utilities">
         <h2><span class="panel-icon" aria-hidden="true">⌨</span>Controles</h2>
         <div class="controls">
-          <p><span>Mover</span><strong>WASD / setas</strong></p>
+          <p><span>Avançar / recuar</span><strong>↑ / ↓</strong></p>
+          <p><span>Girar</span><strong>← / →</strong></p>
           <p><span>Atirar</span><strong>Ctrl</strong></p>
           <p><span>Usar / abrir</span><strong>Espaço</strong></p>
           <p><span>Correr</span><strong>Shift</strong></p>
-          <p><span>Pointer look</span><strong>Opcional</strong></p>
         </div>
       </section>
 
@@ -197,15 +204,25 @@ app.innerHTML = `
       </summary>
       <div class="lab-layout">
         <section class="lab-card">
-          <h3>Arquitetura para a próxima sessão</h3>
+          <div class="lab-recommendation" id="lab-recommendation">
+            <h3>Configuração sugerida para avaliação</h3>
+            <p><strong>Modo:</strong> EXTERNAL_AI · <strong>Fonte:</strong> MySQL neural via backend</p>
+            <p><strong>Candidata:</strong> 4 → 32 → 4, geração 1 <span id="lab-recommended-candidate">consultando catálogo local…</span></p>
+            <button class="text-button" id="lab-apply-recommended" type="button" disabled>Usar candidata</button>
+            <p><strong>Menor custo:</strong> 4 → 6 → 4, geração 1 <span id="lab-recommended-alternative">consultando catálogo local…</span></p>
+            <button class="text-button" id="lab-apply-alternative" type="button" disabled>Usar alternativa</button>
+            <p class="lab-note">Referência atual: Freedoom 2 MAP01, skill 2. Candidatas experimentais; os dados disponíveis não comprovam superioridade entre gerações ou arquiteturas.</p>
+          </div>
+          <h3>Arquitetura utilizável na próxima sessão</h3>
           <label class="field"><span>Arquitetura</span><select id="lab-architecture-select" disabled><option>Conecte o MySQL para listar</option></select></label>
-          <p class="lab-summary-copy" id="lab-architecture-summary">As opções vêm do schema local. A escolha fica fixa durante cada sessão.</p>
+          <p class="lab-summary-copy" id="lab-architecture-summary">Somente arquiteturas com população/geração que o SQL aceita aparecem aqui.</p>
           <div class="lab-layers" id="lab-layer-list"><p class="lab-empty">Abra o painel para consultar arquiteturas do MySQL.</p></div>
           <div class="lab-inspect-selectors">
             <label class="field"><span>Geração para inspeção</span><select id="lab-generation-select" disabled></select></label>
             <label class="field"><span>Genoma para inspeção</span><select id="lab-genome-select" disabled></select></label>
           </div>
-          <p class="lab-note">A seleção de genoma serve para inspecionar pesos e resultados. A procedure do MySQL continua atribuindo genomas aos NPCs conforme a geração atual.</p>
+          <button class="text-button lab-pin-genome-button" id="lab-pin-genome" type="button" disabled>Usar genoma selecionado na próxima partida</button>
+          <p class="lab-note" id="lab-genome-selection-note">Sem genoma fixado, o MySQL distribui o roster da geração utilizável. Uma escolha fixada vale para a sessão inteira e não altera pesos.</p>
         </section>
 
         <section class="lab-card">
@@ -217,9 +234,11 @@ app.innerHTML = `
           <button class="button button-primary lab-button" id="lab-create-architecture" type="button">Criar arquitetura</button>
           <div class="lab-divider"></div>
           <h3>População inicial isolada</h3>
+          <label class="field"><span>Arquitetura vazia para receber a população</span><select id="lab-population-target" disabled><option>Nenhuma arquitetura vazia</option></select></label>
+          <div class="lab-layers lab-population-target-details" id="lab-population-target-details"><p class="lab-empty">Crie uma topologia para escolher uma população inicial.</p></div>
           <label class="field"><span>Indivíduos (2–100)</span><input id="lab-population-size" type="number" min="2" max="100" value="4" /></label>
           <label class="field"><span>Semente reproduzível (0–4294967295)</span><input id="lab-population-seed" type="number" min="0" max="4294967295" value="20261031" /></label>
-          <button class="button lab-button" id="lab-create-population" type="button" disabled>Inicializar população vazia selecionada</button>
+          <button class="button lab-button" id="lab-create-population" type="button" disabled>Inicializar população vazia</button>
           <p class="lab-note">Uma população existente nunca é substituída. Criação administrativa só aceita origem local autorizada e chama as procedures já instaladas.</p>
         </section>
 
@@ -310,9 +329,15 @@ const neuralLabPanel = document.querySelector('#neural-lab');
 const labStatus = document.querySelector('#lab-status');
 const labArchitectureSelect = document.querySelector('#lab-architecture-select');
 const labArchitectureSummary = document.querySelector('#lab-architecture-summary');
+const labRecommendedCandidate = document.querySelector('#lab-recommended-candidate');
+const labRecommendedAlternative = document.querySelector('#lab-recommended-alternative');
+const labApplyRecommended = document.querySelector('#lab-apply-recommended');
+const labApplyAlternative = document.querySelector('#lab-apply-alternative');
 const labLayerList = document.querySelector('#lab-layer-list');
 const labGenerationSelect = document.querySelector('#lab-generation-select');
 const labGenomeSelect = document.querySelector('#lab-genome-select');
+const labPinGenome = document.querySelector('#lab-pin-genome');
+const labGenomeSelectionNote = document.querySelector('#lab-genome-selection-note');
 const labNewName = document.querySelector('#lab-new-name');
 const labNewTopology = document.querySelector('#lab-new-topology');
 const labHiddenActivation = document.querySelector('#lab-hidden-activation');
@@ -321,6 +346,8 @@ const labCreateArchitecture = document.querySelector('#lab-create-architecture')
 const labPopulationSize = document.querySelector('#lab-population-size');
 const labPopulationSeed = document.querySelector('#lab-population-seed');
 const labCreatePopulation = document.querySelector('#lab-create-population');
+const labPopulationTarget = document.querySelector('#lab-population-target');
+const labPopulationTargetDetails = document.querySelector('#lab-population-target-details');
 const labLiveAction = document.querySelector('#lab-live-action');
 const labLiveIdentity = document.querySelector('#lab-live-identity');
 const labLiveEngineResult = document.querySelector('#lab-live-engine-result');
@@ -342,6 +369,19 @@ const labWeightNext = document.querySelector('#lab-weight-next');
 const labWeightPage = document.querySelector('#lab-weight-page');
 const labUseLiveGenome = document.querySelector('#lab-use-live-genome');
 
+function readPinnedGenomePreference() {
+  try {
+    const value = JSON.parse(localStorage.getItem(NEURAL_LAB_GENOME_STORAGE_KEY) || 'null');
+    return value && typeof value.architectureName === 'string' && Number.isInteger(Number(value.genomeId))
+      ? { architectureName: value.architectureName, genomeId: Number(value.genomeId) }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const storedGenomePreference = readPinnedGenomePreference();
+
 const neuralLabState = {
   architectures: [],
   configuredDefault: null,
@@ -351,6 +391,11 @@ const neuralLabState = {
   selectedArchitectureName: localStorage.getItem(NEURAL_LAB_STORAGE_KEY) || null,
   selectedGeneration: null,
   selectedGenomeId: null,
+  selectedGameGenomeId: storedGenomePreference?.genomeId ?? null,
+  selectedGameGenomeArchitecture: storedGenomePreference?.architectureName ?? null,
+  populationTargetName: null,
+  recommendedCandidate: null,
+  recommendedAlternative: null,
   latestDecision: null,
   liveGenome: null,
   activationOffset: 0,
@@ -423,6 +468,144 @@ function selectedLabArchitecture() {
   ) ?? null;
 }
 
+function findRecommendation(topology) {
+  const architecture = findPlayableArchitecture(neuralLabState.architectures, topology);
+  return Number(architecture?.playable_generation) === 1 ? architecture : null;
+}
+
+function updateLabRecommendations() {
+  const candidate = findRecommendation([4, 32, 4]);
+  const alternative = findRecommendation([4, 6, 4]);
+  neuralLabState.recommendedCandidate = candidate;
+  neuralLabState.recommendedAlternative = alternative;
+  labRecommendedCandidate.textContent = candidate
+    ? `${candidate.architecture_name} · ${candidate.genome_count} genomas utilizáveis`
+    : 'não disponível no catálogo com geração 1 utilizável';
+  labRecommendedAlternative.textContent = alternative
+    ? `${alternative.architecture_name} · ${alternative.genome_count} genomas utilizáveis`
+    : 'não disponível no catálogo com geração 1 utilizável';
+  labApplyRecommended.disabled = !candidate || aiBridgeState.sessionArchitectureLocked;
+  labApplyAlternative.disabled = !alternative || aiBridgeState.sessionArchitectureLocked;
+}
+
+function renderPopulationTargetLayers(layers) {
+  labPopulationTargetDetails.replaceChildren();
+  if (!layers.length) {
+    const empty = document.createElement('p');
+    empty.className = 'lab-empty';
+    empty.textContent = 'A arquitetura vazia não tem camadas consultáveis.';
+    labPopulationTargetDetails.append(empty);
+    return;
+  }
+  for (const layer of layers) {
+    const row = document.createElement('div');
+    row.className = 'lab-layer-row';
+    const name = document.createElement('strong');
+    name.textContent = `${layer.layer_order}: ${String(layer.layer_type).toUpperCase()}`;
+    const count = document.createElement('span');
+    count.textContent = `${layer.neuron_count} neurônios`;
+    const detail = document.createElement('small');
+    detail.textContent = layer.io_names || layer.activations || 'ativações configuráveis';
+    row.append(name, count, detail);
+    labPopulationTargetDetails.append(row);
+  }
+}
+
+async function loadPopulationTargetDetails() {
+  const architecture = neuralLabState.architectures.find(
+    (item) => item.architecture_name === neuralLabState.populationTargetName,
+  );
+  if (!architecture) return;
+  try {
+    const payload = await labRequest(`/architectures/${architecture.architecture_id}/layers`);
+    renderPopulationTargetLayers(payload.layers ?? []);
+    labCreatePopulation.disabled = Number(architecture.genome_count) > 0;
+    labCreatePopulation.textContent = Number(architecture.genome_count) > 0
+      ? 'População existente preservada'
+      : 'Inicializar população vazia';
+  } catch (error) {
+    labPopulationTargetDetails.textContent = `Não foi possível consultar as camadas: ${error.message}`;
+    labCreatePopulation.disabled = true;
+  }
+}
+
+function updatePopulationTargets(preferredName = null) {
+  const emptyArchitectures = neuralLabState.architectures.filter(
+    (architecture) => Number(architecture.genome_count) === 0,
+  );
+  labPopulationTarget.replaceChildren();
+  if (!emptyArchitectures.length) {
+    addLabOption(labPopulationTarget, '', 'Nenhuma arquitetura sem população');
+    labPopulationTarget.disabled = true;
+    neuralLabState.populationTargetName = null;
+    labCreatePopulation.disabled = true;
+    labCreatePopulation.textContent = 'Nenhuma arquitetura vazia';
+    labPopulationTargetDetails.innerHTML = '<p class="lab-empty">Crie uma nova arquitetura para inicializar uma população sem tocar nas existentes.</p>';
+    return;
+  }
+  for (const architecture of emptyArchitectures) {
+    addLabOption(labPopulationTarget, architecture.architecture_name,
+      `${architecture.architecture_name} · ${architecture.topology} · sem genomas`);
+  }
+  const selected = emptyArchitectures.find((item) => item.architecture_name === preferredName)
+    ?? emptyArchitectures.find((item) => item.architecture_name === neuralLabState.populationTargetName)
+    ?? emptyArchitectures[0];
+  neuralLabState.populationTargetName = selected.architecture_name;
+  labPopulationTarget.value = selected.architecture_name;
+  labPopulationTarget.disabled = false;
+  void loadPopulationTargetDetails();
+}
+
+function updateGameGenomePinControl() {
+  const architecture = selectedLabArchitecture();
+  const usableGeneration = Number(architecture?.playable_generation);
+  const selectedGenome = neuralLabState.genomes.find(
+    (genome) => String(genome.genome_id) === String(neuralLabState.selectedGenomeId),
+  );
+  const compatible = Boolean(
+    selectedGenome
+    && Number(selectedGenome.generation) === usableGeneration
+    && isPlayableArchitecture(architecture)
+    && !aiBridgeState.sessionArchitectureLocked,
+  );
+  labPinGenome.disabled = !compatible;
+  const pinnedHere = neuralLabState.selectedGameGenomeArchitecture === architecture?.architecture_name;
+  if (pinnedHere && neuralLabState.selectedGameGenomeId) {
+    labPinGenome.textContent = !aiBridgeState.sessionArchitectureLocked
+      && String(neuralLabState.selectedGameGenomeId) === String(neuralLabState.selectedGenomeId)
+      ? 'Remover genoma fixado para a próxima partida'
+      : 'Usar genoma selecionado na próxima partida';
+    labGenomeSelectionNote.textContent = aiBridgeState.sessionArchitectureLocked
+      ? `A sessão atual está travada. O genoma #${neuralLabState.selectedGameGenomeId} só será enviado na próxima partida.`
+      : `Genoma #${neuralLabState.selectedGameGenomeId} fixado para ${architecture.architecture_name}. A próxima sessão manterá essa seleção até o encerramento.`;
+  } else {
+    labPinGenome.textContent = 'Usar genoma selecionado na próxima partida';
+    labGenomeSelectionNote.textContent = compatible
+      ? `A geração ${usableGeneration} é a que o SQL aceita agora. Fixe um genoma dessa geração ou deixe o banco balancear o roster.`
+      : 'Genomas de gerações históricas podem ser inspecionados; só a geração que o SQL aceita pode ser fixada para jogar.';
+  }
+}
+
+async function applyRecommendedArchitecture(architecture) {
+  if (!architecture || !isPlayableArchitecture(architecture) || aiBridgeState.sessionArchitectureLocked) return;
+  labArchitectureSelect.value = architecture.architecture_name;
+  neuralLabState.selectedArchitectureId = architecture.architecture_id;
+  neuralLabState.selectedArchitectureName = architecture.architecture_name;
+  neuralLabState.selectedGeneration = Number(architecture.playable_generation);
+  neuralLabState.activationOffset = 0;
+  neuralLabState.weightOffset = 0;
+  if (neuralLabState.selectedGameGenomeArchitecture !== architecture.architecture_name) {
+    neuralLabState.selectedGameGenomeId = null;
+    neuralLabState.selectedGameGenomeArchitecture = null;
+    localStorage.removeItem(NEURAL_LAB_GENOME_STORAGE_KEY);
+  }
+  localStorage.setItem(NEURAL_LAB_STORAGE_KEY, architecture.architecture_name);
+  await loadLabArchitectureDetails();
+  aiProvider.value = 'backend';
+  aiMode.value = 'external';
+  syncAiMode();
+}
+
 function renderArchitectureLayers() {
   labLayerList.replaceChildren();
   if (!neuralLabState.layers.length) {
@@ -474,6 +657,7 @@ async function loadLabGenomes() {
   const latest = Number.isInteger(Number(architecture.latest_generation))
     ? Number(architecture.latest_generation)
     : 0;
+  const playableGeneration = Number(architecture.playable_generation);
   const generationCount = Math.max(0, Number(architecture.generation_count) || 0);
   const generations = Array.from({ length: Math.min(generationCount, latest + 1, 256) }, (_, index) => index);
   labGenerationSelect.replaceChildren();
@@ -482,7 +666,7 @@ async function loadLabGenomes() {
   const previousGeneration = neuralLabState.selectedGeneration;
   neuralLabState.selectedGeneration = generations.includes(previousGeneration)
     ? previousGeneration
-    : latest;
+    : (Number.isInteger(playableGeneration) ? playableGeneration : latest);
   if (!generations.includes(latest)) {
     addLabOption(labGenerationSelect, latest, `Geração ${latest}`);
   }
@@ -495,8 +679,7 @@ async function loadLabGenomes() {
   if (Number(architecture.genome_count) <= 0) {
     addLabOption(labGenomeSelect, '', 'Sem população inicial');
     labGenomeSelect.disabled = true;
-    labCreatePopulation.disabled = false;
-    labCreatePopulation.textContent = 'Inicializar população vazia selecionada';
+    updateGameGenomePinControl();
     return;
   }
 
@@ -507,16 +690,19 @@ async function loadLabGenomes() {
   for (const genome of neuralLabState.genomes) {
     const evaluationCount = Number(genome.real_evaluation_count) || 0;
     addLabOption(labGenomeSelect, genome.genome_id,
-      `#${genome.genome_id} · fitness ${Number(genome.fitness).toFixed(4)} · ${evaluationCount} avaliações reais`);
+      `#${genome.genome_id} · fitness ${Number(genome.fitness).toFixed(4)} · ${evaluationCount} avaliações v2 persistidas`);
   }
   labGenomeSelect.disabled = !neuralLabState.genomes.length;
-  neuralLabState.selectedGenomeId = neuralLabState.genomes[0]?.genome_id ?? null;
+  const pinnedGenome = neuralLabState.genomes.find((genome) => (
+    neuralLabState.selectedGameGenomeArchitecture === architecture.architecture_name
+    && String(genome.genome_id) === String(neuralLabState.selectedGameGenomeId)
+  ));
+  neuralLabState.selectedGenomeId = pinnedGenome?.genome_id ?? neuralLabState.genomes[0]?.genome_id ?? null;
   if (neuralLabState.selectedGenomeId !== null) {
     labGenomeSelect.value = String(neuralLabState.selectedGenomeId);
   }
-  labCreatePopulation.disabled = true;
-  labCreatePopulation.textContent = 'População preservada (já existe)';
   labWeightLayer.disabled = !neuralLabState.selectedGenomeId || neuralLabState.layers.length < 2;
+  updateGameGenomePinControl();
 }
 
 async function loadLabArchitectureDetails() {
@@ -525,9 +711,7 @@ async function loadLabArchitectureDetails() {
   neuralLabState.selectedArchitectureId = architecture.architecture_id;
   neuralLabState.selectedArchitectureName = architecture.architecture_name;
   const genomeCount = Number(architecture.genome_count) || 0;
-  const populationStatus = genomeCount > 0
-    ? `${genomeCount} genomas · ${architecture.generation_count} gerações`
-    : 'sem população; não selecionável para decisão até inicializar genomas';
+  const populationStatus = `${genomeCount} genomas · ${architecture.generation_count} gerações · SQL aceita geração ${architecture.playable_generation}`;
   labArchitectureSummary.textContent = `${architecture.architecture_name} · ${architecture.topology} · ${architecture.parameter_count ?? (Number(architecture.weight_count) + Number(architecture.bias_count))} parâmetros · ${populationStatus}`;
   try {
     const layers = await labRequest(`/architectures/${architecture.architecture_id}/layers`);
@@ -553,17 +737,25 @@ async function loadLabArchitectures(preferredName = null) {
     const payload = await labRequest('/architectures');
     neuralLabState.architectures = payload.architectures ?? [];
     neuralLabState.configuredDefault = payload.configured_default ?? null;
+    updateLabRecommendations();
+    updatePopulationTargets(preferredName);
     labArchitectureSelect.replaceChildren();
-    if (!neuralLabState.architectures.length) {
-      addLabOption(labArchitectureSelect, '', 'Nenhuma arquitetura cadastrada');
+    const playableArchitectures = neuralLabState.architectures.filter(isPlayableArchitecture);
+    if (!playableArchitectures.length) {
+      addLabOption(labArchitectureSelect, '', 'Nenhuma arquitetura com geração utilizável');
       labArchitectureSelect.disabled = true;
-      setLabStatus('Schema sem arquiteturas', 'error');
+      neuralLabState.selectedArchitectureName = null;
+      neuralLabState.selectedArchitectureId = null;
+      labArchitectureSummary.textContent = 'O catálogo não tem população compatível para iniciar uma sessão neural.';
+      labLayerList.innerHTML = '<p class="lab-empty">Crie uma topologia, inicialize uma população e atualize o catálogo.</p>';
+      updateGameGenomePinControl();
+      setLabStatus('Nenhuma população utilizável no SQL', 'error');
       return;
     }
-    for (const architecture of neuralLabState.architectures) {
+    for (const architecture of playableArchitectures) {
       const genomeCount = Number(architecture.genome_count) || 0;
       addLabOption(labArchitectureSelect, architecture.architecture_name,
-        `${architecture.architecture_name} · ${architecture.topology} · ${genomeCount} genomas`);
+        `${architecture.architecture_name} · ${architecture.topology} · geração ${architecture.playable_generation} · ${genomeCount} genomas`);
     }
     const activeSessionArchitecture = aiBridgeState.sessionArchitectureLocked
       ? neuralLabState.latestDecision?.architectureName || neuralLabState.selectedArchitectureName
@@ -572,13 +764,14 @@ async function loadLabArchitectures(preferredName = null) {
       || preferredName
       || neuralLabState.selectedArchitectureName
       || neuralLabState.configuredDefault;
-    const selected = neuralLabState.architectures.find((architecture) => architecture.architecture_name === requested)
-      ?? neuralLabState.architectures.find((architecture) => Number(architecture.genome_count) > 0)
-      ?? neuralLabState.architectures[0];
+    const selected = playableArchitectures.find((architecture) => architecture.architecture_name === requested)
+      ?? neuralLabState.recommendedCandidate
+      ?? neuralLabState.recommendedAlternative
+      ?? playableArchitectures[0];
     neuralLabState.selectedArchitectureName = selected.architecture_name;
     neuralLabState.selectedArchitectureId = selected.architecture_id;
     labArchitectureSelect.value = selected.architecture_name;
-    labArchitectureSelect.disabled = false;
+    labArchitectureSelect.disabled = aiBridgeState.sessionArchitectureLocked;
     if (!aiBridgeState.sessionArchitectureLocked) {
       localStorage.setItem(NEURAL_LAB_STORAGE_KEY, selected.architecture_name);
     }
@@ -763,7 +956,9 @@ async function submitLabArchitecture() {
 }
 
 async function submitLabPopulation() {
-  const architecture = selectedLabArchitecture();
+  const architecture = neuralLabState.architectures.find(
+    (item) => item.architecture_name === neuralLabState.populationTargetName,
+  );
   if (!architecture) return;
   try {
     const populationSize = Number(labPopulationSize.value);
@@ -774,7 +969,7 @@ async function submitLabPopulation() {
       method: 'POST',
       body: JSON.stringify({ population_size: populationSize, seed }),
     });
-    setLabStatus(`População criada com semente ${seed}; experimentos existentes preservados.`, 'ok');
+    setLabStatus(`População inicializada com semente ${seed}; ela ainda não foi treinada. Dados existentes preservados.`, 'ok');
     await loadLabArchitectures(architecture.architecture_name);
   } catch (error) {
     setLabStatus(`População não criada: ${error.message}`, 'error');
@@ -1143,7 +1338,9 @@ async function finishAiSession() {
   aiBridgeState.inflight.clear();
   aiBridgeState.lastRequestAtByNpc.clear();
   aiBridgeState.sessionArchitectureLocked = false;
-  labArchitectureSelect.disabled = neuralLabState.architectures.length === 0;
+  labArchitectureSelect.disabled = !neuralLabState.architectures.some(isPlayableArchitecture);
+  updateGameGenomePinControl();
+  updateLabRecommendations();
   return closed;
 }
 
@@ -1167,6 +1364,8 @@ function requestBackendDecision(npcState) {
   aiBridgeState.lastRequestAtByNpc.set(npcId, now);
   aiBridgeState.sessionArchitectureLocked = true;
   labArchitectureSelect.disabled = true;
+  updateGameGenomePinControl();
+  updateLabRecommendations();
   const performanceStartedAt = performance.now();
   aiBridgeState.inflight.set(requestId, {
     npcState,
@@ -1174,11 +1373,15 @@ function requestBackendDecision(npcState) {
     performanceStartedAt,
     sessionId: state.sessionId,
   });
+  const pinnedGenomeId = neuralLabState.selectedGameGenomeArchitecture === neuralLabState.selectedArchitectureName
+    ? neuralLabState.selectedGameGenomeId
+    : null;
   aiBridgeState.socket.send(JSON.stringify({
     type: 'npc_state',
     request_id: requestId,
     session_id: state.sessionId,
     architecture_name: neuralLabState.selectedArchitectureName,
+    ...(pinnedGenomeId ? { genome_id: pinnedGenomeId } : {}),
     npc: npcState,
   }));
 }
@@ -1302,7 +1505,7 @@ function syncAiMode({ log = true } = {}) {
 
   aiDebugMode.textContent = modeName;
   sessionAiMode.textContent = modeName;
-  aiProvider.disabled = !isExternal;
+  aiProvider.disabled = false;
 
   if (!isExternal) {
     aiMode.disabled = true;
@@ -1661,6 +1864,42 @@ labArchitectureSelect.addEventListener('change', () => {
   neuralLabState.weightOffset = 0;
   localStorage.setItem(NEURAL_LAB_STORAGE_KEY, selected.architecture_name);
   void loadLabArchitectureDetails();
+});
+labApplyRecommended.addEventListener('click', () => {
+  void applyRecommendedArchitecture(neuralLabState.recommendedCandidate);
+});
+labApplyAlternative.addEventListener('click', () => {
+  void applyRecommendedArchitecture(neuralLabState.recommendedAlternative);
+});
+labPinGenome.addEventListener('click', () => {
+  if (aiBridgeState.sessionArchitectureLocked) {
+    setLabStatus('A seleção de genoma está travada até o encerramento desta sessão.', 'error');
+    return;
+  }
+  const architecture = selectedLabArchitecture();
+  const genomeId = Number(neuralLabState.selectedGenomeId);
+  if (!architecture || !Number.isInteger(genomeId) || genomeId < 1) return;
+  const samePinnedGenome = neuralLabState.selectedGameGenomeArchitecture === architecture.architecture_name
+    && String(neuralLabState.selectedGameGenomeId) === String(genomeId);
+  if (samePinnedGenome) {
+    neuralLabState.selectedGameGenomeId = null;
+    neuralLabState.selectedGameGenomeArchitecture = null;
+    localStorage.removeItem(NEURAL_LAB_GENOME_STORAGE_KEY);
+    setLabStatus('Genoma fixado removido; o SQL balanceará o roster na próxima sessão.', 'ok');
+  } else {
+    neuralLabState.selectedGameGenomeId = genomeId;
+    neuralLabState.selectedGameGenomeArchitecture = architecture.architecture_name;
+    localStorage.setItem(NEURAL_LAB_GENOME_STORAGE_KEY, JSON.stringify({
+      architectureName: architecture.architecture_name,
+      genomeId,
+    }));
+    setLabStatus(`Genoma #${genomeId} selecionado para a próxima sessão; a atual não será alterada.`, 'ok');
+  }
+  updateGameGenomePinControl();
+});
+labPopulationTarget.addEventListener('change', () => {
+  neuralLabState.populationTargetName = labPopulationTarget.value || null;
+  void loadPopulationTargetDetails();
 });
 labGenerationSelect.addEventListener('change', () => {
   neuralLabState.selectedGeneration = Number(labGenerationSelect.value);

@@ -56,6 +56,30 @@ try {
   await page.waitForFunction(() => document.querySelector('#lab-status')?.textContent.includes('MySQL conectado'), null, { timeout: 10000 });
   const architectureCount = await page.locator('#lab-architecture-select option').count();
   if (architectureCount < 1) throw new Error('Nenhuma arquitetura foi carregada pelo endpoint SQL.');
+  const catalog = await page.evaluate(async () => {
+    const apiBase = `${window.location.protocol}//${window.location.hostname}:8000`;
+    const response = await fetch(`${apiBase}/api/lab/architectures`);
+    if (!response.ok) throw new Error(`Catálogo SQL HTTP ${response.status}`);
+    return (await response.json()).architectures ?? [];
+  });
+  const catalogPlayableNames = catalog.filter((item) => Number(item.playable) === 1)
+    .map((item) => item.architecture_name).sort();
+  const selectorNames = await page.locator('#lab-architecture-select option').evaluateAll(
+    (options) => options.map((option) => option.value).sort(),
+  );
+  if (JSON.stringify(selectorNames) !== JSON.stringify(catalogPlayableNames)) {
+    throw new Error('O seletor de partida diverge das arquiteturas que o SQL considera utilizáveis.');
+  }
+  const expectedCandidate = catalog.find((item) => item.topology === '4 -> 32 -> 4' && Number(item.playable) === 1);
+  const expectedAlternative = catalog.find((item) => item.topology === '4 -> 6 -> 4' && Number(item.playable) === 1);
+  const candidateText = await page.locator('#lab-recommended-candidate').innerText();
+  const alternativeText = await page.locator('#lab-recommended-alternative').innerText();
+  if (expectedCandidate ? !candidateText.includes(expectedCandidate.architecture_name) : !candidateText.includes('não disponível')) {
+    throw new Error('A recomendação 4→32→4 não corresponde ao catálogo SQL.');
+  }
+  if (expectedAlternative ? !alternativeText.includes(expectedAlternative.architecture_name) : !alternativeText.includes('não disponível')) {
+    throw new Error('A alternativa 4→6→4 não corresponde ao catálogo SQL.');
+  }
   await page.waitForFunction(() => document.querySelector('#lab-layer-list')?.textContent.includes('INPUT'));
   await page.waitForFunction(() => document.querySelector('#lab-weights .lab-weight-row'));
   await page.waitForFunction(() => {
@@ -64,6 +88,27 @@ try {
   });
   const selectedGenomeWeights = await page.locator('#lab-weights .lab-weight-row').count();
   const selectedGenomeBias = await page.locator('#lab-weight-bias').innerText();
+  const controlsText = await page.locator('#utilities .controls').innerText();
+  if (controlsText.includes('WASD') || !controlsText.includes('↑ / ↓') || !controlsText.includes('Ctrl')
+      || !controlsText.includes('Espaço') || !controlsText.includes('Shift')) {
+    throw new Error(`O painel de controles não reflete o mapeamento validado do engine: ${controlsText}`);
+  }
+
+  const pinButton = page.locator('#lab-pin-genome');
+  if (await pinButton.isEnabled()) {
+    const gameGenomeId = await page.locator('#lab-genome-select').inputValue();
+    await pinButton.click();
+    const storedPin = await page.evaluate(() => JSON.parse(localStorage.getItem('neural-doom-lab.game-genome') || 'null'));
+    if (String(storedPin?.genomeId) !== String(gameGenomeId)) {
+      throw new Error('A seleção de genoma não foi persistida para a próxima sessão.');
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('.neural-lab-summary').click();
+    await page.waitForFunction(() => document.querySelector('#lab-status')?.textContent.includes('MySQL conectado'), null, { timeout: 10000 });
+    if (String(await page.locator('#lab-genome-select').inputValue()) !== String(gameGenomeId)) {
+      throw new Error('O genoma fixado não foi restaurado após recarregar a interface.');
+    }
+  }
 
   await page.locator('#lab-new-topology').fill('4,64,4');
   await page.waitForFunction(() => document.querySelector('#lab-parameter-count')?.textContent.includes('580 parâmetros treináveis'));
@@ -83,6 +128,10 @@ try {
     result: 'PASS',
     architectureCount,
     selectedArchitecture: await page.locator('#lab-architecture-select').inputValue(),
+    playableArchitectures: selectorNames,
+    recommendedCandidate: expectedCandidate?.architecture_name ?? null,
+    recommendedAlternative: expectedAlternative?.architecture_name ?? null,
+    controlsText,
     selectedGenomeWeights,
     selectedGenomeBias,
     sqlReadRequests: labRequests.length,

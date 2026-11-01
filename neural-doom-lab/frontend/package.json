@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "test": "node --test src/ai-metrics.test.js src/ai-url.test.js src/neural-lab.test.js",
     "test:neural-lab-ui": "node scripts/neural-lab-ui-smoke.mjs",
+    "test:neural-lab-modes": "node scripts/neural-lab-mode-smoke.mjs",
     "test:neural-lab-fps": "node scripts/neural-lab-fps-check.mjs",
     "test:match": "node scripts/automated-match.mjs",
     "test:experiments": "node scripts/run-architecture-experiments.mjs"
