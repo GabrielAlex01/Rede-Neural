@@ -28,12 +28,12 @@ O instalador portátil aplica quatro experimentos v2 e uma população demo. Por
 
 O schema de jogo local consultado em MySQL 8.0.46 tinha 12 nomes de arquitetura, cobrindo as sete topologias: os oito aliases demo/legados e quatro aliases v2. Havia 112 genomas no total. Nos aliases legados, as populações eram de quatro genomas por geração; 128 e 256 tinham só G0, com uma avaliação real por genoma e sem evolução. Em v2, referência/H32/H64 tinham 8 membros em G0 e 8 em G1; a profunda tinha 8 em G0. Essa é a fotografia do schema local consultado, não o conteúdo garantido de todo clone novo.
 
-Para criar de forma opcional os aliases e populações históricas de **todas as sete** arquiteturas, sem tocar nos aliases/genomas v2, execute uma vez `database/11_prepare_autonomous_architecture_experiments.sql` a partir da raiz do clone. Ele usa as seeds `2026102501`–`2026102507`, população 4, ReLU, mutação 5%, duas gerações planejadas e duas avaliações por genoma. A procedure verifica a configuração; uma repetição exata não duplica nem sobrescreve arquiteturas, experimentos ou genomas, e nomes/topologias conflitantes falham. O arquivo recria sua própria procedure auxiliar `sp_nn_prepare_autonomous_experiment_20261025`. As arquiteturas 128 e 256 têm mais pesos e podem tornar a criação mais demorada.
+Para criar de forma opcional os aliases e populações históricas de **todas as sete** arquiteturas, sem tocar nos aliases/genomas v2, execute uma vez `neural-doom-lab/database/core/11_prepare_autonomous_architecture_experiments.sql` a partir da raiz do clone. Ele usa as seeds `2026102501`–`2026102507`, população 4, ReLU, mutação 5%, duas gerações planejadas e duas avaliações por genoma. A procedure verifica a configuração; uma repetição exata não duplica nem sobrescreve arquiteturas, experimentos ou genomas, e nomes/topologias conflitantes falham. O arquivo recria sua própria procedure auxiliar `sp_nn_prepare_autonomous_experiment_20261025`. As arquiteturas 128 e 256 têm mais pesos e podem tornar a criação mais demorada.
 
 PowerShell, da raiz do repositório de trabalho:
 
 ```powershell
-Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
+Get-Content -Raw neural-doom-lab/database/core/11_prepare_autonomous_architecture_experiments.sql |
   & "$env:ProgramFiles\MySQL\MySQL Server 8.0\bin\mysql.exe" `
     --login-path=neural-doom-installer-20261024 `
     --protocol=TCP --host=127.0.0.1 --port=3306 `

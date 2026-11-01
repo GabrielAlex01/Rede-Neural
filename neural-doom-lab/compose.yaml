@@ -30,8 +30,7 @@ services:
       NN_DB_USER: ${NN_DB_USER:?Run scripts/setup.ps1 -Mode Docker first}
       NN_DB_PASSWORD: ${NN_DB_PASSWORD:?Run scripts/setup.ps1 -Mode Docker first}
     volumes:
-      - ../database:/opt/neural/repo/database:ro
-      - ./database:/opt/neural/repo/neural-doom-lab/database:ro
+      - ./database:/opt/neural/project/database:ro
       - ./scripts/database-install-plan.tsv:/opt/neural/plan.tsv:ro
       - ./docker/install-database.sh:/opt/neural/runner/install-database.sh:ro
     depends_on:

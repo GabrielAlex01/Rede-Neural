@@ -6,6 +6,7 @@ Freedoom 2 no navegador com NPCs que recebem decisões calculadas por uma MLP no
 
 - `frontend/`: interface, cliente WebSocket e Chocolate Doom/WebAssembly.
 - `backend/`: serviço FastAPI e conexão com MySQL.
+- `database/core/`: schema base, procedures, fixtures SQL e seed opcional das sete topologias; o instalador lê somente esses arquivos do próprio projeto.
 - `engine/`: patch do bridge C e script para recompilar o engine.
 - `licenses/`: licenças e avisos de terceiros.
 - `LICENSE`: licença do projeto.
@@ -98,7 +99,7 @@ O jogo não garante que todos os genomas da população apareçam em cada mapa. 
 A MLP original `npc_teste_4_6_4` permanece intacta. Para preparar, de forma opcional, populações isoladas e seeds fixas para as sete topologias testadas sem usar o Workbench, execute na raiz do clone:
 
 ```powershell
-Get-Content -Raw database/11_prepare_autonomous_architecture_experiments.sql |
+Get-Content -Raw neural-doom-lab/database/core/11_prepare_autonomous_architecture_experiments.sql |
   & 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe' `
     --login-path=neural-doom-installer-20261024 `
     --database=neural_doom_local_game_20261024 --batch --raw

@@ -7,7 +7,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$repositoryRoot = (Resolve-Path (Join-Path $projectRoot '..')).Path
 $planPath = Join-Path $PSScriptRoot 'database-install-plan.tsv'
 $appEnvPath = Join-Path $projectRoot 'backend\.env'
 $gameSchema = 'neural_doom_local_game_20261024'
@@ -191,7 +190,7 @@ $plan = foreach ($line in [IO.File]::ReadAllLines($planPath)) {
 foreach ($entry in $plan) {
     $schema = if ($entry.Target -eq 'game') { $gameSchema } elseif ($entry.Target -eq 'test') { $testSchema } else { throw 'Destino desconhecido no plano SQL.' }
     if ($entry.Step -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Nome de etapa inválido no plano SQL.' }
-    $sqlPath = Join-Path $repositoryRoot ($entry.Path -replace '/', '\')
+    $sqlPath = Join-Path $projectRoot ($entry.Path -replace '/', '\')
     if (-not (Test-Path -LiteralPath $sqlPath)) { throw "Arquivo SQL não existe no clone: $($entry.Path)" }
     $checksum = (Get-FileHash -LiteralPath $sqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $row = Invoke-MySqlQuery "SELECT CONCAT(state,'|',checksum) FROM neural_doom_lab_setup_steps WHERE step_key='$($entry.Step)'" $schema

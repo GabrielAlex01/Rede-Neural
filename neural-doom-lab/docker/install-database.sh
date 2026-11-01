@@ -6,7 +6,7 @@ MYSQL_PORT=${MYSQL_PORT:-3306}
 GAME_SCHEMA=neural_doom_local_game_20261024
 TEST_SCHEMA=neural_doom_local_sql_test_20261024
 INSTALLATION_ID=neural-doom-lab-portable-v1
-REPOSITORY_ROOT=/opt/neural/repo
+REPOSITORY_ROOT=/opt/neural/project
 
 if [ -z "${MYSQL_ROOT_PASSWORD:-}" ] || [ -z "${NN_DB_USER:-}" ] || [ -z "${NN_DB_PASSWORD:-}" ]; then
   echo "Configuração privada incompleta; execute scripts/setup.ps1 -Mode Docker." >&2

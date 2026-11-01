@@ -9,7 +9,7 @@ Workspace original `C:\Users\victo\doom-wasm`: preservado, sem alterações.
 
 As consultas foram feitas em modo de leitura no schema isolado `neural_doom_local_game_20261024`, pelo login-path instalador. A conta da aplicação conecta ao MySQL 8.0.46, mas tem privilégios de `EXECUTE` e não permite enumerar tabelas; nenhum privilégio ou credencial foi alterado. Nenhum schema recebeu escrita nesta etapa.
 
-Arquivos e áreas examinados: `database/04_genome_initialization.sql`, `05_neural_inference.sql`, `06_combat_telemetry.sql`, `07_genetic_evolution.sql`, `08_configurable_architectures.sql`, `09_training_experiments.sql`, `11_prepare_autonomous_architecture_experiments.sql`; `backend/decision_service.py`, `backend/main.py`, `backend/action_metrics.py`; `engine/neural-ai-bridge.patch` e as cópias-fonte locais `p_enemy.c`, `p_inter.c`, `p_mobj.c`, `p_mobj.h`, `p_saveg.c`, `p_neural_ai.c/.h`; `frontend/src/main.js`, `frontend/src/ai-metrics.js`; os scripts de partida automatizada e o relatório de experimentos.
+Arquivos e áreas examinados: `database/core/04_genome_initialization.sql`, `05_neural_inference.sql`, `06_combat_telemetry.sql`, `07_genetic_evolution.sql`, `08_configurable_architectures.sql`, `09_training_experiments.sql`, `11_prepare_autonomous_architecture_experiments.sql`; `backend/decision_service.py`, `backend/main.py`, `backend/action_metrics.py`; `engine/neural-ai-bridge.patch` e as cópias-fonte locais `p_enemy.c`, `p_inter.c`, `p_mobj.c`, `p_mobj.h`, `p_saveg.c`, `p_neural_ai.c/.h`; `frontend/src/main.js`, `frontend/src/ai-metrics.js`; os scripts de partida automatizada e o relatório de experimentos.
 
 Achados dos dados existentes:
 
@@ -31,7 +31,7 @@ As mudanças estão em `neural-doom-lab/engine/neural-ai-bridge.patch` e, para b
 ## Continuação exata
 
 1. Validar o diff regenerado e construir um toolchain temporário novo: a pasta `%TEMP%\neural-doom-final-review-toolchain` da revisão anterior ficou parcialmente removida e não contém mais `emsdk.bat`, `emcc`, CMake ou Ninja. Não tocar no `doom-wasm` original.
-2. Adicionar uma migração não destrutiva e um campo de versão de atribuição/fitness. Registros existentes devem permanecer identificados como legado (`legacy_latched_v1`); avaliações futuras, feitas com o novo WASM, devem receber `neural_attack_provenance_v2`. Atualizar também o DDL base `database/06_combat_telemetry.sql`.
+2. Adicionar uma migração não destrutiva e um campo de versão de atribuição/fitness. Registros existentes devem permanecer identificados como legado (`legacy_latched_v1`); avaliações futuras, feitas com o novo WASM, devem receber `neural_attack_provenance_v2`. Atualizar também o DDL base `database/core/06_combat_telemetry.sql`.
 3. Testar a migração e a suíte SQL em um schema de testes novo e isolado; não limpar nem reutilizar destrutivamente `neural_doom_local_sql_test_20261024`.
 4. Evitar misturar avaliações legadas e novas nas arquiteturas originais. Se necessário, criar aliases de avaliação somente para as topologias existentes 4→6→4, 4→32→4 e 4→64→4, copiando genomas identificados, sem mudar pesos de origem nem criar topologias maiores.
 5. Recompilar o WASM, executar backend/frontend e partidas Edge automatizadas repetidas com os mesmos controles; conferir SQL escolhido, oferta/aplicação/rejeição do engine, ACK, eventos e métricas persistidas. Incluir H64 g1 como controle FLEE e genomas diversos existentes como comparação para observar ATTACK neural válido.
