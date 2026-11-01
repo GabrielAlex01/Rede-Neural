@@ -189,12 +189,32 @@ try {
       };
     }
     if (selectedArchitectureName) {
-      await page.locator('#lab-architecture-select').selectOption(selectedArchitectureName);
+      const targetArchitecture = await page.evaluate(async (name) => {
+        const apiBase = `${window.location.protocol}//${window.location.hostname}:8000`;
+        const response = await fetch(`${apiBase}/api/lab/architectures`);
+        if (!response.ok) throw new Error(`Catálogo SQL HTTP ${response.status}`);
+        const payload = await response.json();
+        return payload.architectures?.find((item) => item.architecture_name === name) ?? null;
+      }, selectedArchitectureName);
+      if (!targetArchitecture) throw new Error(`Arquitetura ${selectedArchitectureName} não consta no catálogo SQL.`);
+      const generation = String(targetArchitecture.playable_generation);
+      if (await page.locator('#lab-architecture-select').inputValue() !== selectedArchitectureName) {
+        const genomeResponse = page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return url.pathname.endsWith(`/architectures/${targetArchitecture.architecture_id}/genomes`)
+            && url.searchParams.get('generation') === generation;
+        });
+        await page.locator('#lab-architecture-select').selectOption(selectedArchitectureName);
+        await genomeResponse;
+      }
+      await page.waitForFunction(({ name, generation }) => {
+        const summary = document.querySelector('#lab-architecture-summary')?.textContent ?? '';
+        const selectedGeneration = document.querySelector('#lab-generation-select')?.value;
+        const genomes = [...(document.querySelector('#lab-genome-select')?.options ?? [])]
+          .filter((option) => option.value !== '');
+        return summary.includes(name) && selectedGeneration === generation && genomes.length > 0;
+      }, { name: selectedArchitectureName, generation }, { timeout: 15000 });
     }
-    await page.waitForFunction(
-      (name) => !name || document.querySelector('#lab-architecture-summary')?.textContent.includes(name),
-      selectedArchitectureName,
-    );
     await page.waitForFunction(
       () => [...(document.querySelector('#lab-genome-select')?.options ?? [])]
         .some((option) => option.value !== ''),
@@ -222,6 +242,12 @@ try {
           await page.locator('#lab-generation-select').selectOption(generation);
           await generationResponse;
         }
+        await page.waitForFunction((generation) => {
+          const selectedGeneration = document.querySelector('#lab-generation-select')?.value;
+          const genomeOptions = [...(document.querySelector('#lab-genome-select')?.options ?? [])]
+            .filter((option) => option.value !== '');
+          return selectedGeneration === generation && genomeOptions.length > 0;
+        }, generation, { timeout: 15000 });
         genomeAvailable = await page.locator('#lab-genome-select option').evaluateAll(
           (options, genomeId) => options.some((option) => option.value === String(genomeId)),
           selectedGenomeId,
@@ -230,6 +256,11 @@ try {
       }
       if (!genomeAvailable) throw new Error(`Genoma #${selectedGenomeId} não pertence a uma geração consultável desta arquitetura.`);
       await page.locator('#lab-genome-select').selectOption(String(selectedGenomeId));
+      await page.waitForFunction(
+        () => document.querySelector('#lab-pin-genome')?.disabled === false,
+        null,
+        { timeout: 10000 },
+      );
       await page.locator('#lab-pin-genome').click();
       await page.waitForFunction(
         () => document.querySelector('#lab-pin-genome')?.textContent.includes('Remover genoma fixado'),
@@ -303,13 +334,67 @@ try {
   const metricsBeforeClose = await page.locator('#ai-debug-metrics').innerText();
   const gameLogEnd = await page.locator('#log-output').innerText();
   const startSkill = gameLogEnd.match(/startskill\s+(\d+)/i)?.[1] ?? null;
-
+  let activationProvenance = null;
   await page.locator('#ai-mode').selectOption('original');
   await page.waitForFunction(
     () => document.querySelector('#ai-debug-backend')?.textContent.includes('Inativo'),
     null,
     { timeout: 5000 },
   ).catch(() => {});
+  const ackDeadline = Date.now() + 7000;
+  while (Date.now() < ackDeadline && !sessionAck) await page.waitForTimeout(50);
+  while (Date.now() < ackDeadline && sessionAck?.ack_token && !sessionReceiptAck) await page.waitForTimeout(50);
+
+  if (selectedArchitectureName && selectedGenomeId !== null) {
+    const panelArchitecture = await page.locator('#lab-architecture-select').inputValue();
+    const panelGenomeId = Number(await page.locator('#lab-genome-select').inputValue());
+    const expectedRunId = [...decisions].reverse().find((decision) => decision.run_id)?.run_id;
+    if (panelArchitecture !== selectedArchitectureName || panelGenomeId !== selectedGenomeId || !expectedRunId) {
+      throw new Error('A arquitetura/genoma fixados não correspondem à seleção do painel ou não há run SQL.');
+    }
+    await page.locator('#lab-inspection-layer').dispatchEvent('change');
+    await page.waitForFunction(({ runId, genomeId, architectureName }) => {
+      const identity = document.querySelector('#lab-live-identity')?.textContent ?? '';
+      const runText = document.querySelector('#lab-live-run')?.textContent ?? '';
+      const parsedRunId = runText.match(/(?:run\s*)?#(\d+)/i)?.[1];
+      return parsedRunId === String(runId)
+        && identity.includes(`genoma #${genomeId}`)
+        && identity.includes(architectureName)
+        && document.querySelectorAll('#lab-activations .lab-neuron-row').length > 0;
+    }, { runId: expectedRunId, genomeId: selectedGenomeId, architectureName: selectedArchitectureName }, { timeout: 15000 });
+    const liveRunText = await page.locator('#lab-live-run').innerText();
+    const runId = Number(liveRunText.match(/(?:run\s*)?#(\d+)/i)?.[1]);
+    const layerOrder = Number(await page.locator('#lab-inspection-layer').inputValue());
+    const activationPayload = await page.evaluate(async ({ runId, layerOrder }) => {
+      const apiBase = `${window.location.protocol}//${window.location.hostname}:8000`;
+      const response = await fetch(`${apiBase}/api/lab/runs/${runId}/activations?layer_order=${layerOrder}&limit=128&offset=0`);
+      if (!response.ok) throw new Error(`Consulta das ativações do run ${runId} falhou: HTTP ${response.status}`);
+      return response.json();
+    }, { runId, layerOrder });
+    const activationRows = activationPayload.activations ?? [];
+    const activationRowsMatch = activationRows.length > 0 && activationRows.every((row) => (
+      Number(row.run_id) === runId
+      && Number(row.genome_id) === selectedGenomeId
+      && row.architecture_name === selectedArchitectureName
+    ));
+    const displayedActivationValues = await page.locator('#lab-activations .lab-neuron-row code').allTextContents();
+    const sourceActivationValues = activationRows.map((row) => Number(row.activation).toPrecision(7));
+    const displayedActivationsMatch = displayedActivationValues.length === sourceActivationValues.length
+      && displayedActivationValues.every((value, index) => value === sourceActivationValues[index]);
+    activationProvenance = {
+      panel_architecture: panelArchitecture,
+      panel_genome_id: panelGenomeId,
+      run_id: runId,
+      api_activation_rows: activationRows.length,
+      every_activation_matches_run_genome_and_architecture: activationRowsMatch,
+      displayed_values_match_sql_rows: displayedActivationsMatch,
+      verified: activationRowsMatch && displayedActivationsMatch,
+    };
+    if (!activationProvenance.verified) {
+      throw new Error(`A identidade das ativações não corresponde à seleção do painel: ${JSON.stringify(activationProvenance)}`);
+    }
+  }
+
   await page.waitForTimeout(500);
 
   const liveIdentity = selectedArchitectureName
@@ -359,6 +444,7 @@ try {
       selected_architecture: selectedArchitectureName,
       live_action: await page.locator('#lab-live-action').innerText(),
       live_identity: liveIdentity,
+      activation_provenance: activationProvenance,
       engine_result: await page.locator('#lab-live-engine-result').innerText(),
       latency: await page.locator('#lab-live-latency').innerText(),
       visible_activation_count: await page.locator('#lab-activations .lab-neuron-row').count(),
@@ -389,6 +475,7 @@ try {
     session_end_ack: record.session_end_ack,
     session_end_ack_receipt: record.session_end_ack_receipt,
     live_identity: liveIdentity,
+    activation_provenance: activationProvenance,
     engine_screenshot: canvasPath,
     lab_screenshot: labScreenshotPath,
     browser_errors: pageErrors,
