@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.action_metrics import InvalidActionMetrics, is_monotonic_snapshot, validate_action_metrics
 from backend.decision_service import DatabaseDecisionService, DecisionError, validate_observation
-from backend.main import create_app
+from backend.main import _validate_architecture_payload, create_app
 
 
 SESSION_ID = "11111111-1111-4111-8111-111111111111"
@@ -56,9 +56,9 @@ class StubService:
         if self.health_error:
             raise self.health_error
 
-    def decide(self, session_id, npc):
+    def decide(self, session_id, npc, architecture_name=None):
         validate_observation(session_id, npc)
-        self.calls.append((session_id, npc))
+        self.calls.append((session_id, npc, architecture_name))
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
         if self.error:
@@ -78,6 +78,36 @@ class StubService:
         self.confirmed_acks.append((session_id, ack_token))
 
 
+class LabStubService(StubService):
+    configured_architecture_name = "lab_4_64_4"
+
+    def list_lab_architectures(self):
+        return [{
+            "architecture_id": 8,
+            "architecture_name": "lab_4_64_4",
+            "topology": "4 -> 64 -> 4",
+            "genome_count": 2,
+        }]
+
+    def list_lab_architecture_layers(self, architecture_id):
+        return [{"layer_order": 0, "layer_type": "input", "neuron_count": 4}]
+
+    def list_lab_genomes(self, architecture_id, generation, limit, offset):
+        return [{"genome_id": 81, "generation": generation or 0, "fitness": 0}]
+
+    def get_lab_run_activations(self, run_id, layer_order, limit, offset):
+        return [{"run_id": run_id, "layer_order": layer_order, "activation": 0.5}]
+
+    def get_lab_genome_weights(self, genome_id, target_layer_order, target_position, limit, offset):
+        return [{"genome_id": genome_id, "weight": 0.25}]
+
+    def create_lab_architecture(self, architecture_name, topology, hidden_activation):
+        return [{"architecture_id": 99, "architecture_name": architecture_name}]
+
+    def create_lab_population(self, architecture_name, population_size, seed):
+        return [{"genome_id": index + 1} for index in range(population_size)]
+
+
 class FakeCursor:
     def __init__(self, outputs, ack_token=ACK_TOKEN):
         self.outputs = outputs
@@ -86,6 +116,9 @@ class FakeCursor:
         self.parameters = None
         self.calls = []
         self.closed = False
+        self.description = None
+        self.result_rows = []
+        self.executed = None
 
     def callproc(self, procedure, parameters):
         self.procedure = procedure
@@ -100,6 +133,18 @@ class FakeCursor:
     def close(self):
         self.closed = True
 
+    def execute(self, statement, parameters=()):
+        self.executed = (statement, parameters)
+        self.description = (("architecture_id",), ("architecture_name",))
+        self.result_rows = [(42, "lab_4_8_4")]
+
+    def fetchall(self):
+        return self.result_rows
+
+    def nextset(self):
+        self.description = None
+        return False
+
 
 class FakeConnection:
     def __init__(self, cursor):
@@ -108,7 +153,7 @@ class FakeConnection:
         self.rolled_back = False
         self.closed = False
 
-    def cursor(self):
+    def cursor(self, **_kwargs):
         return self.fake_cursor
 
     def commit(self):
@@ -130,6 +175,24 @@ class FakePool:
 
 
 class DecisionServiceTests(unittest.TestCase):
+    def test_topology_validation_keeps_real_io_and_sql_parameter_limit(self):
+        name, topology, activation = _validate_architecture_payload({
+            "architecture_name": "lab_4_64_4",
+            "topology": [4, 64, 4],
+            "hidden_activation": "relu",
+        })
+        self.assertEqual((name, topology, activation), ("lab_4_64_4", [4, 64, 4], "relu"))
+        with self.assertRaises(Exception):
+            _validate_architecture_payload({
+                "architecture_name": "lab_invalid_io",
+                "topology": [5, 64, 4],
+            })
+        with self.assertRaises(Exception):
+            _validate_architecture_payload({
+                "architecture_name": "lab_too_large",
+                "topology": [4, 512, 512, 4],
+            })
+
     def test_observation_is_validated_without_python_policy(self):
         session_id, observation = validate_observation(SESSION_ID, NPC)
         self.assertEqual(session_id, SESSION_ID)
@@ -159,7 +222,11 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertEqual(cursor.calls[0][1][4], 100)
         self.assertEqual(cursor.calls[1], ("sp_nn_mark_session_v2", (SESSION_ID,)))
         self.assertEqual(cursor.calls[2], ("sp_nn_register_training_session_v2", (SESSION_ID,)))
-        self.assertEqual(decision, {"run_id": 41, "action": "ATTACK", "confidence": 0.982})
+        self.assertEqual(decision["run_id"], 41)
+        self.assertEqual(decision["action"], "ATTACK")
+        self.assertAlmostEqual(decision["confidence"], 0.982)
+        self.assertEqual(decision["architecture_name"], "npc_teste_4_6_4")
+        self.assertGreaterEqual(decision["database_round_trip_ms"], decision["mysql_inference_ms"])
         self.assertTrue(connection.committed)
         self.assertTrue(cursor.closed)
         self.assertTrue(connection.closed)
@@ -178,7 +245,38 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertEqual(cursor.calls[0][1][1], SESSION_ID)
         self.assertEqual(cursor.calls[1][0], "sp_nn_mark_session_v2")
         self.assertEqual(cursor.calls[2][0], "sp_nn_register_training_session_v2")
-        self.assertEqual(decision, {"run_id": 52, "action": "FLEE", "confidence": 0.81})
+        self.assertEqual(decision["run_id"], 52)
+        self.assertEqual(decision["action"], "FLEE")
+        self.assertEqual(decision["architecture_name"], "npc_teste_4_64_32_64_4")
+
+    def test_session_selected_architecture_overrides_default_as_bound_sql_parameter(self):
+        cursor = FakeCursor((53, "FLEE", 0.82))
+        service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
+
+        decision = service.decide(SESSION_ID, NPC, "lab_4_32_4")
+
+        self.assertEqual(cursor.calls[0][0], "sp_nn_decide_for_architecture")
+        self.assertEqual(cursor.calls[0][1][0], "lab_4_32_4")
+        self.assertEqual(decision["architecture_name"], "lab_4_32_4")
+
+    def test_lab_reads_and_writes_use_fixed_procedures_and_bound_parameters(self):
+        cursor = FakeCursor(())
+        service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
+
+        rows = service.list_lab_architectures()
+        self.assertEqual(rows, [{"architecture_id": 42, "architecture_name": "lab_4_8_4"}])
+        self.assertEqual(cursor.executed, ("CALL sp_nn_lab_list_architectures()", ()))
+
+        service.create_lab_architecture("lab_4_8_4", [4, 8, 4], "relu")
+        statement, parameters = cursor.executed
+        self.assertEqual(statement, "CALL sp_nn_create_configurable_architecture(%s, %s, %s)")
+        self.assertEqual(parameters, ("lab_4_8_4", "[4, 8, 4]", "relu"))
+
+        service.create_lab_population("lab_4_8_4", 4, 12345)
+        self.assertEqual(
+            cursor.executed,
+            ("CALL sp_nn_create_seeded_population(%s, %s, %s)", ("lab_4_8_4", 4, 12345)),
+        )
 
     def test_training_session_is_registered_once_per_backend_process(self):
         cursor = FakeCursor((52, "CHASE", 0.81))
@@ -264,6 +362,53 @@ class WebSocketBridgeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("private connection details", response.text)
 
+    def test_lab_read_api_returns_mysql_catalog_and_mutations_require_local_origin(self):
+        client = TestClient(create_app(LabStubService()))
+        catalog = client.get("/api/lab/architectures")
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual(catalog.json()["configured_default"], "lab_4_64_4")
+        self.assertEqual(catalog.json()["architectures"][0]["topology"], "4 -> 64 -> 4")
+        layers = client.get("/api/lab/architectures/8/layers")
+        self.assertEqual(layers.status_code, 200)
+        self.assertEqual(layers.json()["layers"][0]["neuron_count"], 4)
+
+        mutation = client.post(
+            "/api/lab/architectures",
+            headers={"Origin": "http://127.0.0.1:5173"},
+            json={"architecture_name": "lab_4_8_4", "topology": [4, 8, 4]},
+        )
+        self.assertEqual(mutation.status_code, 403)
+
+    def test_local_same_origin_can_create_architecture_and_empty_population(self):
+        service = LabStubService()
+        service.list_lab_architectures = lambda: [{
+            "architecture_id": 8,
+            "architecture_name": "lab_4_64_4",
+            "topology": "4 -> 64 -> 4",
+            "genome_count": 0,
+        }]
+        client = TestClient(
+            create_app(service),
+            base_url="http://127.0.0.1:8000",
+            client=("127.0.0.1", 50000),
+        )
+
+        architecture = client.post(
+            "/api/lab/architectures",
+            headers={"Origin": "http://127.0.0.1:5173"},
+            json={"architecture_name": "lab_4_8_4", "topology": [4, 8, 4]},
+        )
+        population = client.post(
+            "/api/lab/architectures/lab_4_64_4/population",
+            headers={"Origin": "http://127.0.0.1:5173"},
+            json={"population_size": 4, "seed": 12345},
+        )
+
+        self.assertEqual(architecture.status_code, 200)
+        self.assertEqual(architecture.json()["created"][0]["architecture_name"], "lab_4_8_4")
+        self.assertEqual(population.status_code, 200)
+        self.assertEqual(population.json()["population_size"], 4)
+
     def test_returns_action_and_preserves_request_and_npc_ids(self):
         service = StubService()
         client = TestClient(create_app(service))
@@ -282,6 +427,31 @@ class WebSocketBridgeTests(unittest.TestCase):
         self.assertEqual(response["action"], "CHASE")
         self.assertEqual(response["run_id"], 17)
         self.assertEqual(service.calls[0][0], SESSION_ID)
+
+    def test_selected_architecture_is_stable_for_the_lifetime_of_a_session(self):
+        service = StubService()
+        client = TestClient(create_app(service))
+        with client.websocket_connect("/ws/ai") as websocket:
+            for request_id, architecture in (("arch-1", "lab_4_32_4"), ("arch-2", "lab_4_64_4")):
+                websocket.send_json({
+                    "type": "npc_state",
+                    "request_id": request_id,
+                    "session_id": SESSION_ID,
+                    "architecture_name": architecture,
+                    "npc": NPC,
+                })
+                responses = []
+                while True:
+                    response = websocket.receive_json()
+                    if response.get("request_id") == request_id:
+                        responses.append(response)
+                        break
+                if request_id == "arch-1":
+                    self.assertEqual(responses[0]["action"], "CHASE")
+                else:
+                    self.assertEqual(responses[0]["reason"], "architecture_locked_for_session")
+        self.assertEqual(service.calls[0][2], "lab_4_32_4")
+        self.assertEqual(len(service.calls), 1)
 
     def test_mysql_failure_returns_invalid_for_engine_fallback(self):
         client = TestClient(create_app(StubService(error=DecisionError("offline"))))

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import math
+import json
 import os
+import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -10,6 +13,10 @@ from typing import Any, Protocol
 
 VALID_ACTIONS = {"IDLE", "CHASE", "ATTACK", "FLEE"}
 COMBAT_EVENT_TYPES = {"PLAYER_DAMAGE", "PLAYER_KILL", "NPC_DAMAGE", "NPC_DEATH"}
+ALLOWED_DATABASES = {
+    "neural_doom_local_game_20261024",
+    "neural_doom_local_sql_test_20261024",
+}
 
 
 class DecisionError(RuntimeError):
@@ -26,7 +33,7 @@ class ConnectionPool(Protocol):
 
 class DecisionService(Protocol):
     def check_health(self) -> None: ...
-    def decide(self, session_id: Any, npc: Any) -> dict[str, Any]: ...
+    def decide(self, session_id: Any, npc: Any, architecture_name: Any = None) -> dict[str, Any]: ...
     def record_combat_event(self, session_id: Any, event: Any) -> None: ...
     def close_session(self, session_id: Any) -> str | None: ...
     def confirm_training_ack(self, session_id: Any, ack_token: Any) -> None: ...
@@ -114,6 +121,10 @@ class DatabaseDecisionService:
         if self._architecture_name == "":
             self._architecture_name = None
 
+    @property
+    def configured_architecture_name(self) -> str | None:
+        return self._architecture_name
+
     @classmethod
     def from_environment(cls) -> DatabaseDecisionService:
         return cls()
@@ -132,7 +143,9 @@ class DatabaseDecisionService:
                 port = int(os.environ.get("NN_DB_PORT", "3306"))
                 user = os.environ["NN_DB_USER"]
                 password = os.environ["NN_DB_PASSWORD"]
-                database = os.environ.get("NN_DB_NAME", "npc_neural_game")
+                database = os.environ.get("NN_DB_NAME", "neural_doom_local_game_20261024")
+                if database not in ALLOWED_DATABASES:
+                    raise DecisionError("NN_DB_NAME precisa apontar para um schema isolado Neural Doom")
                 self._pool = mysql.connector.pooling.MySQLConnectionPool(
                     pool_name="neural_doom_pool",
                     pool_size=5,
@@ -173,10 +186,28 @@ class DatabaseDecisionService:
             if connection is not None:
                 connection.close()
 
-    def decide(self, session_id: Any, npc: Any) -> dict[str, Any]:
+    def decide(
+        self,
+        session_id: Any,
+        npc: Any,
+        architecture_name: Any = None,
+    ) -> dict[str, Any]:
         canonical_session_id, observation = validate_observation(session_id, npc)
+        if architecture_name is not None:
+            if (
+                not isinstance(architecture_name, str)
+                or not architecture_name.strip()
+                or len(architecture_name.strip()) > 50
+            ):
+                raise InvalidRequest("architecture_name inválido")
+            requested_architecture = architecture_name.strip()
+        else:
+            requested_architecture = self._architecture_name
+        effective_architecture = requested_architecture or "npc_teste_4_6_4"
         connection = None
         cursor = None
+        started_at = time.perf_counter()
+        inference_ms = None
 
         try:
             connection = self._get_pool().get_connection()
@@ -194,12 +225,16 @@ class DatabaseDecisionService:
                 "",
                 0.0,
             )
-            if self._architecture_name and self._architecture_name != "npc_teste_4_6_4":
+            if architecture_name is not None or (
+                requested_architecture and requested_architecture != "npc_teste_4_6_4"
+            ):
                 procedure = "sp_nn_decide_for_architecture"
-                parameters = (self._architecture_name, *parameters)
+                parameters = (effective_architecture, *parameters)
             else:
                 procedure = "sp_nn_decide"
+            inference_started = time.perf_counter()
             result = cursor.callproc(procedure, parameters)
+            inference_ms = (time.perf_counter() - inference_started) * 1000
             cursor.callproc("sp_nn_mark_session_v2", (canonical_session_id,))
             with self._training_sessions_lock:
                 if canonical_session_id not in self._training_sessions:
@@ -237,7 +272,133 @@ class DatabaseDecisionService:
             "run_id": run_id,
             "action": action,
             "confidence": float(confidence),
+            "architecture_name": effective_architecture,
+            "mysql_inference_ms": inference_ms,
+            "database_round_trip_ms": (time.perf_counter() - started_at) * 1000,
         }
+
+    @staticmethod
+    def _result_sets(cursor: Any) -> list[list[dict[str, Any]]]:
+        result_sets: list[list[dict[str, Any]]] = []
+        while True:
+            if getattr(cursor, "description", None):
+                column_names = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+                if rows and isinstance(rows[0], dict):
+                    result_sets.append(rows)
+                else:
+                    result_sets.append([
+                        dict(zip(column_names, row, strict=False)) for row in rows
+                    ])
+            nextset = getattr(cursor, "nextset", None)
+            if nextset is None or not nextset():
+                break
+        return result_sets
+
+    def _call_lab_procedure(
+        self,
+        procedure: str,
+        parameters: tuple[Any, ...] = (),
+        *,
+        commit: bool = False,
+    ) -> list[dict[str, Any]]:
+        # Procedure names are internal constants at every call site; all values
+        # remain bound parameters, including architecture and genome selectors.
+        connection = None
+        cursor = None
+        try:
+            connection = self._get_pool().get_connection()
+            try:
+                cursor = connection.cursor(dictionary=True)
+            except TypeError:
+                cursor = connection.cursor()
+            placeholders = ", ".join(["%s"] * len(parameters))
+            cursor.execute(f"CALL {procedure}({placeholders})", parameters)
+            result_sets = self._result_sets(cursor)
+            if commit:
+                connection.commit()
+            return result_sets[0] if result_sets else []
+        except Exception as exc:
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+            if isinstance(exc, DecisionError):
+                raise
+            raise DecisionError("A operação do laboratório MySQL falhou") from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
+
+    def list_lab_architectures(self) -> list[dict[str, Any]]:
+        return self._call_lab_procedure("sp_nn_lab_list_architectures")
+
+    def list_lab_architecture_layers(self, architecture_id: int) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_lab_architecture_layers", (architecture_id,)
+        )
+
+    def list_lab_genomes(
+        self,
+        architecture_id: int,
+        generation: int | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_lab_list_genomes", (architecture_id, generation, limit, offset)
+        )
+
+    def get_lab_run_activations(
+        self,
+        run_id: int,
+        layer_order: int,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_lab_run_activations", (run_id, layer_order, limit, offset)
+        )
+
+    def get_lab_genome_weights(
+        self,
+        genome_id: int,
+        target_layer_order: int,
+        target_position: int,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_lab_genome_weights",
+            (genome_id, target_layer_order, target_position, limit, offset),
+        )
+
+    def create_lab_architecture(
+        self,
+        architecture_name: str,
+        topology: list[int],
+        hidden_activation: str,
+    ) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_create_configurable_architecture",
+            (architecture_name, json.dumps(topology), hidden_activation),
+            commit=True,
+        )
+
+    def create_lab_population(
+        self,
+        architecture_name: str,
+        population_size: int,
+        seed: int,
+    ) -> list[dict[str, Any]]:
+        return self._call_lab_procedure(
+            "sp_nn_create_seeded_population",
+            (architecture_name, population_size, seed),
+            commit=True,
+        )
 
     def record_combat_event(self, session_id: Any, event: Any) -> None:
         if not isinstance(event, dict):
