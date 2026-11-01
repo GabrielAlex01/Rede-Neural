@@ -17,6 +17,13 @@ Para executar no Windows: MySQL Server 8.0.46, Python 3.10+, Node.js/npm. A conf
 
 O clone inclui os arquivos de execução do Chocolate Doom/WASM e Freedoom 2 em `.data`; o computador que só joga não precisa de EMScripten, CMake, Ninja, compilador C nem WAD separado. Esses itens são necessários apenas para reconstruir o engine; consulte [`engine/README.md`](engine/README.md).
 
+## Clonar o repositório
+
+```powershell
+git clone https://github.com/GabrielAlex01/Rede-Neural.git
+cd Rede-Neural/neural-doom-lab
+```
+
 ## Instalação reproduzível no Windows
 
 Instale MySQL Server 8.0.46, Python e Node.js. Crie um login-path local para uma conta administrativa; `mysql_config_editor` solicita a senha de forma interativa:
@@ -142,6 +149,8 @@ O jogo não garante que todos os genomas da população apareçam em cada mapa. 
 
 ## Experimentos com redes maiores
 
+As sete topologias experimentadas foram `4→6→4`, `4→32→4`, `4→64→4`, `4→64→32→64→4`, `4→128→64→128→4`, `4→256→128→64→4` e `4→512→4`. A criação e os resultados de cada uma estão separados por instalação limpa, seed opcional, genomas, partidas e evolução em [`docs/arquiteturas-e-experimentos.md`](docs/arquiteturas-e-experimentos.md). Ter sido criada ou testada não significa que uma rede tenha aprendido ou seja adequada para jogo normal.
+
 A MLP original `npc_teste_4_6_4` permanece intacta. Para preparar, de forma opcional, populações isoladas e seeds fixas para as sete topologias testadas sem usar o Workbench, execute na raiz do clone:
 
 ```powershell
@@ -253,3 +262,36 @@ O build web gera `frontend/dist/` localmente; não o versione. Para recompilar o
 `HEALTH_RATIO`, `PLAYER_DISTANCE_RATIO`, `PLAYER_VISIBLE` e `HEALTH_DELTA` são as quatro entradas. O índice interno do estado do DOOM é guardado para diagnóstico, não tratado como medida contínua. O MySQL executa forward propagation e escolhe a maior saída entre `IDLE`, `CHASE`, `ATTACK` e `FLEE`; o FastAPI apenas valida, chama procedures e devolve a ação. Para os detalhes do schema e das procedures, veja [`../database/modelagem.md`](../database/modelagem.md).
 
 Os genomas começam aleatórios; não existe backpropagation nem aprendizado supervisionado. A evolução usa fitness de eventos reais no SQL. A infraestrutura de experimentos está pronta, mas ainda são necessárias partidas humanas repetidas e comparáveis antes de afirmar melhora entre arquiteturas ou gerações. Movimento, combate, modo multi-NPC e fallback também devem ser confirmados manualmente no ambiente de apresentação.
+
+## Roteiro de testes para a equipe
+
+Os resultados publicados são smoke tests automatizados e partidas headless em um computador Windows. Eles não substituem testes em outros computadores nem partidas humanas. Registrem separadamente um **comportamento confirmado**, um **problema reproduzível** e uma funcionalidade ainda **não avaliada**.
+
+### Verificações sugeridas
+
+- [ ] Instalar em outro Windows com MySQL Server 8.0.46 local; confirmar que setup, `doctor.ps1` e `test.ps1` terminam sem tocar em schemas preexistentes. Workbench é opcional; use-o para confirmar o schema e consultar as procedures.
+- [ ] Jogar em `ORIGINAL_AI` e comparar com `EXTERNAL_AI` + `MySQL neural`; confirmar controles, menu, encerramento e ACK. Os controles atualmente conferidos são ↑/↓, ←/→, Ctrl, Espaço e Shift; mouse look ainda não foi validado.
+- [ ] Testar Freedoom 2 em MAP01 e em outros mapas/dificuldades, anotando mapa, skill e modo.
+- [ ] Testar tipos diferentes de inimigo e mais de um NPC simultâneo; registrar arquitetura, geração e IDs de genoma selecionados no painel e confirmados pela sessão.
+- [ ] Criar uma arquitetura com nome novo, inicializar população com seed registrada, consultar neurônios/pesos/biases e inspecionar ativações. Confirmar que as populações antigas continuam intactas.
+- [ ] Observar perseguição e ataque em condições de combate válidas. Separar decisão SQL, oferta ao engine, aplicação, rejeição, fallback, dano e eliminação. ATTACK escolhido não prova que o engine aceitou o ataque.
+- [ ] Exercitar fallback numa instalação descartável isolada, parando apenas o backend de teste ou simulando indisponibilidade controlada. Não desligue um MySQL compartilhado para testar fallback.
+- [ ] Registrar latência média e P95, contagens de ações e resultado com um NPC e com vários NPCs. Repetir condições antes de comparar genomas; não afirmar melhora com partidas incomparáveis.
+
+### O que está confirmado e o que falta
+
+Confirmado nesta versão: o catálogo lista arquiteturas que o SQL aceita; o painel pode fixar um genoma para a próxima sessão; na regressão H32 G1 os dois NPCs usaram o genoma selecionado, as ativações corresponderam ao run/genoma/arquitetura e o ACK fechou a avaliação. H32 selecionou somente FLEE nas últimas 58 decisões observadas e não teve combate nessa sessão. Uma H8 inicial aleatória registrou eventos de combate, mas isso não comprova treinamento. Os números e limites estão em [`docs/validacao-interface-modos-2026-11-01.md`](docs/validacao-interface-modos-2026-11-01.md).
+
+Ainda não avaliados pela equipe: instalação em outros computadores; jogabilidade humana; mouse look; outros mapas, dificuldades e tipos de NPC; fallback durante uma desconexão real em ambiente isolado; e comparações repetidas e controladas de desempenho/evolução. Não trate essas lacunas como bugs confirmados.
+
+### Como registrar um problema
+
+Inclua no relato:
+
+1. Sistema operacional, versão de MySQL/browser/Node e modo selecionado.
+2. Arquitetura, geração e genoma; mapa, dificuldade e tipo/quantidade de NPCs.
+3. Pré-condições e passos exatos para reproduzir.
+4. Resultado esperado e resultado observado.
+5. `session_id`, JSON do runner, screenshot ou logs relevantes, removendo dados pessoais.
+
+Nunca anexe `backend/.env`, senhas, login-paths ou outros segredos. Se não houver reprodução, identifique o achado como observação pontual, não como falha confirmada.
