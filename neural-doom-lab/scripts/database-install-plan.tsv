@@ -13,6 +13,7 @@ game|migration-13|database/migrations/13_training_integrity_v2.sql
 game|migration-14|database/migrations/14_genetic_experiments_v2.sql
 game|migration-15|database/migrations/15_genetic_evolution_v2.sql
 game|migration-16|database/migrations/16_balanced_genome_assignment_v2.sql
+game|migration-17|database/migrations/17_neural_lab_inspection.sql
 game|demo-population|database/portable/seed-demo-population.sql
 game|demo-genetic-experiments-v2|database/experiments/16_prepare_genetic_experiments_v2.sql
 test|base-schema|database/core/schema.sql
@@ -29,6 +30,7 @@ test|migration-13|database/migrations/13_training_integrity_v2.sql
 test|migration-14|database/migrations/14_genetic_experiments_v2.sql
 test|migration-15|database/migrations/15_genetic_evolution_v2.sql
 test|migration-16|database/migrations/16_balanced_genome_assignment_v2.sql
+test|migration-17|database/migrations/17_neural_lab_inspection.sql
 test|fixture-01|database/core/tests/01_assert_architecture.sql
 test|fixture-02|database/core/tests/02_genome_initialization.sql
 test|fixture-03|database/core/tests/03_neural_inference.sql
@@ -44,3 +46,4 @@ test|fixture-12|database/tests/12_training_integrity_v2.sql
 test|fixture-13|database/tests/13_training_experiments_v2.sql
 test|fixture-14|database/tests/14_genetic_evolution_v2.sql
 test|fixture-15|database/tests/15_balanced_genome_assignment_v2.sql
+test|fixture-16|database/tests/16_neural_lab_api.sql
