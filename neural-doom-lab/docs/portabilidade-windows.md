@@ -50,6 +50,12 @@ Se preferir instalar e preparar dependências sem iniciar serviços, use `-NoSta
 
 `doctor.ps1` confirma FastAPI com `SELECT 1` no MySQL e o frontend HTTP. `test.ps1` executa backend, testes do frontend e build; `-IncludeHeadlessMatch` usa Edge headless, sem teclado/mouse físico, e grava JSON e screenshot em `%TEMP%\neural-doom-results`.
 
+Se a política local do PowerShell bloquear scripts, invoque o setup numa sessão processual com bypass, sem alterar a política persistente:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Mode Windows
+```
+
 O instalador recusa qualquer um dos dois nomes de schema se já existir sem o marcador de propriedade e ledger da instalação. Ele não tenta adotar nem esvaziar schemas pré-criados manualmente. Para evitar colisão com dados já existentes, use uma instância MySQL de testes isolada; não apague ou renomeie schemas para contornar a recusa.
 
 Para uma segunda instalação num MySQL separado/porta diferente, inicie essa instância e use, por exemplo:
@@ -149,8 +155,8 @@ Se a equipe autorizar publicação remota, publique a branch existente separadam
 
 ## Resultados das partidas automatizadas
 
-As partidas foram executadas em Edge headless, E1M1/skill 2, com controle automatizado, usando a arquitetura `genetic_v2_ref46_20261031` e o MySQL temporário isolado acima. A primeira partida durou 31,6 s e registrou 148 decisões SQL válidas em três NPCs: 100 CHASE e 48 ATTACK. No ACK final, o engine contabilizou 315 ações aplicadas, 99 rejeitadas e 4 oportunidades em fallback; dos ataques ofertados ao engine, 20 foram aplicados e 99 rejeitados. Foram enviados 5 eventos `PLAYER_DAMAGE`, somando 16 de dano ao jogador na avaliação de um genoma. A latência WebSocket teve média de 32,3 ms e P95 de 70,9 ms.
+Uma instalação limpa foi clonada do commit `be0f4f6` da branch `codex/mysql-neural-doom`, sem `.env`, venv, `node_modules`, `dist` ou caches do workspace. O setup usou MySQL 8.0.46 privado e novo em `127.0.0.1:13318`; Python foi instalado com cache desativado e npm usou um diretório de cache vazio. Foram instaladas 16 etapas SQL no schema de jogo e 29 no de testes (15 fixtures), com 38 tabelas em cada, 21 rotinas no schema de jogo, cinco arquiteturas, 40 genomas e quatro experimentos genéticos v2. Uma segunda execução do instalador marcou todas as 45 etapas como já instaladas sem reaplicar fixtures. O usuário gerado do backend recebeu somente `EXECUTE` no schema de jogo.
 
-A segunda partida durou 31,3 s e registrou 179 decisões SQL: 143 CHASE e 36 FLEE. O ACK contou 464 ações aplicadas, 67 rejeitadas e 4 oportunidades em fallback; 40 ofertas FLEE foram aplicadas e 67 rejeitadas. Não houve evento de dano nesta partida. A latência WebSocket teve média de 25,9 ms e P95 de 36,9 ms.
+O resultado final de partida desse clone, em Edge headless no E1M1/skill 2 e arquitetura `genetic_v2_ref46_20261031`, durou 31,3 s e gerou 149 decisões SQL válidas em três NPCs: 101 CHASE e 48 ATTACK. O ACK final registrou 318 ações aplicadas, 105 rejeitadas e três oportunidades em fallback. Das 123 ofertas ATTACK ao engine, 18 foram aplicadas e 105 rejeitadas. Quatro eventos `PLAYER_DAMAGE` produziram 16 de dano ao jogador na avaliação de um genoma. A latência WebSocket teve média de 27,2 ms e P95 de 41,3 ms. O ACK foi fechado, a avaliação de fitness v2 foi concluída e o recibo foi confirmado; três avaliações foram persistidas com `ack_confirmed_at` preenchido.
 
-Nas duas partidas, `closed=true`, avaliação v2 concluída e recibo de ACK confirmado; o MySQL persistiu três avaliações por sessão com `ack_confirmed_at` preenchido. As sessões são de smoke test em condições comparáveis, mas não controlam semente do Freedoom nem demonstram melhora genética. `IDLE` não foi selecionada; CHASE, ATTACK e FLEE apareceram em decisões reais. A instalação física no notebook e em computadores da faculdade permanece por validar.
+Antes do clone final, duas partidas de fumaça no mesmo MySQL privado também exercitaram outras saídas: uma teve 148 decisões (100 CHASE, 48 ATTACK), 315 ações aplicadas, 99 rejeitadas e quatro fallbacks; outra teve 179 decisões (143 CHASE, 36 FLEE), 464 ações aplicadas, 67 rejeitadas e quatro fallbacks. Em ambas o ACK e as três avaliações foram persistidos. Esses testes não controlam a semente do Freedoom nem demonstram melhora genética; `IDLE` não apareceu em nenhuma das partidas. Na instalação limpa passaram 21 testes backend, seis frontend, o build Vite e a partida headless. O build do WASM não foi repetido porque o código do engine não mudou nesta etapa; os artefatos versionados foram carregados pelo jogo. O Compose foi validado sintaticamente, mas o daemon não estava disponível para validar containers. Nenhuma partida humana foi feita; notebook e computadores da faculdade continuam pendentes de teste físico.
