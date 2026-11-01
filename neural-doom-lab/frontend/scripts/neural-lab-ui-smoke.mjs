@@ -56,29 +56,42 @@ try {
   await page.waitForFunction(() => document.querySelector('#lab-status')?.textContent.includes('MySQL conectado'), null, { timeout: 10000 });
   const architectureCount = await page.locator('#lab-architecture-select option').count();
   if (architectureCount < 1) throw new Error('Nenhuma arquitetura foi carregada pelo endpoint SQL.');
-  const catalog = await page.evaluate(async () => {
+  const catalogPayload = await page.evaluate(async () => {
     const apiBase = `${window.location.protocol}//${window.location.hostname}:8000`;
     const response = await fetch(`${apiBase}/api/lab/architectures`);
     if (!response.ok) throw new Error(`Catálogo SQL HTTP ${response.status}`);
-    return (await response.json()).architectures ?? [];
+    return await response.json();
   });
-  const catalogPlayableNames = catalog.filter((item) => Number(item.playable) === 1)
-    .map((item) => item.architecture_name).sort();
+  const catalog = catalogPayload.architectures ?? [];
+  const playableInCatalogOrder = catalog.filter((item) => Number(item.playable) === 1);
+  const catalogPlayableNames = playableInCatalogOrder.map((item) => item.architecture_name).sort();
   const selectorNames = await page.locator('#lab-architecture-select option').evaluateAll(
     (options) => options.map((option) => option.value).sort(),
   );
   if (JSON.stringify(selectorNames) !== JSON.stringify(catalogPlayableNames)) {
     throw new Error('O seletor de partida diverge das arquiteturas que o SQL considera utilizáveis.');
   }
+  const requestedDefault = catalog.find((item) => item.architecture_name === catalogPayload.configured_default
+    && Number(item.playable) === 1);
+  const expectedInitialArchitecture = requestedDefault?.architecture_name ?? playableInCatalogOrder[0]?.architecture_name;
+  if (await page.locator('#lab-architecture-select').inputValue() !== expectedInitialArchitecture) {
+    throw new Error('A seleção inicial não respeita preferência salva/padrão configurado/ordem do catálogo.');
+  }
   const expectedCandidate = catalog.find((item) => item.topology === '4 -> 32 -> 4' && Number(item.playable) === 1);
   const expectedAlternative = catalog.find((item) => item.topology === '4 -> 6 -> 4' && Number(item.playable) === 1);
   const candidateText = await page.locator('#lab-recommended-candidate').innerText();
   const alternativeText = await page.locator('#lab-recommended-alternative').innerText();
+  const evidenceText = await page.locator('#lab-recommendation').innerText();
   if (expectedCandidate ? !candidateText.includes(expectedCandidate.architecture_name) : !candidateText.includes('não disponível')) {
-    throw new Error('A recomendação 4→32→4 não corresponde ao catálogo SQL.');
+    throw new Error('A opção jogável 4→32→4 não corresponde ao catálogo SQL.');
   }
   if (expectedAlternative ? !alternativeText.includes(expectedAlternative.architecture_name) : !alternativeText.includes('não disponível')) {
-    throw new Error('A alternativa 4→6→4 não corresponde ao catálogo SQL.');
+    throw new Error('A referência leve 4→6→4 não corresponde ao catálogo SQL.');
+  }
+  if (!evidenceText.includes('não classifica fitness')
+      || !evidenceText.includes('Maior fitness individual v2 observado')
+      || !evidenceText.includes('Genoma com combate demonstrado')) {
+    throw new Error('O painel não separa o filtro de jogo das evidências de fitness e combate.');
   }
   await page.waitForFunction(() => document.querySelector('#lab-layer-list')?.textContent.includes('INPUT'));
   await page.waitForFunction(() => document.querySelector('#lab-weights .lab-weight-row'));
@@ -129,8 +142,9 @@ try {
     architectureCount,
     selectedArchitecture: await page.locator('#lab-architecture-select').inputValue(),
     playableArchitectures: selectorNames,
-    recommendedCandidate: expectedCandidate?.architecture_name ?? null,
-    recommendedAlternative: expectedAlternative?.architecture_name ?? null,
+    h32PlayableOption: expectedCandidate?.architecture_name ?? null,
+    lightReference: expectedAlternative?.architecture_name ?? null,
+    evidenceText,
     controlsText,
     selectedGenomeWeights,
     selectedGenomeBias,

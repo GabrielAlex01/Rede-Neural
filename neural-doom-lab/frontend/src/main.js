@@ -205,13 +205,16 @@ app.innerHTML = `
       <div class="lab-layout">
         <section class="lab-card">
           <div class="lab-recommendation" id="lab-recommendation">
-            <h3>Configuração sugerida para avaliação</h3>
-            <p><strong>Modo:</strong> EXTERNAL_AI · <strong>Fonte:</strong> MySQL neural via backend</p>
-            <p><strong>Candidata:</strong> 4 → 32 → 4, geração 1 <span id="lab-recommended-candidate">consultando catálogo local…</span></p>
-            <button class="text-button" id="lab-apply-recommended" type="button" disabled>Usar candidata</button>
-            <p><strong>Menor custo:</strong> 4 → 6 → 4, geração 1 <span id="lab-recommended-alternative">consultando catálogo local…</span></p>
-            <button class="text-button" id="lab-apply-alternative" type="button" disabled>Usar alternativa</button>
-            <p class="lab-note">Referência atual: Freedoom 2 MAP01, skill 2. Candidatas experimentais; os dados disponíveis não comprovam superioridade entre gerações ou arquiteturas.</p>
+            <h3>Opções de avaliação — sem ranking de desempenho</h3>
+            <p><strong>Modo de teste:</strong> EXTERNAL_AI · <strong>Fonte:</strong> MySQL neural via backend · Freedoom 2 MAP01, skill 2.</p>
+            <p>O seletor filtra por topologia e geração que o SQL aceita. Ele não classifica fitness, comportamento, ações aplicadas/rejeitadas nem latência.</p>
+            <p><strong>H32 G1 jogável:</strong> 4 → 32 → 4 <span id="lab-recommended-candidate">consultando catálogo local…</span>. Na regressão mais recente, 58/58 decisões foram FLEE para dois NPCs; houve 172 oportunidades, 170 ofertas ao engine, 119 aplicações, 51 rejeições e 2 fallbacks, sem eventos de combate. O SQL persistiu fitness 0,3333, zero danos e zero mortes. Na sessão headless anterior, 63/64 decisões foram FLEE; os NPCs receberam 40 de dano e um morreu. Esses resultados não demonstram aprendizado.</p>
+            <button class="text-button" id="lab-apply-recommended" type="button" disabled>Selecionar H32 para a próxima sessão</button>
+            <p><strong>Referência mais leve:</strong> 4 → 6 → 4, 58 parâmetros treináveis, geração 1 <span id="lab-recommended-alternative">consultando catálogo local…</span>. É uma baseline de custo, não a vencedora por fitness.</p>
+            <button class="text-button" id="lab-apply-alternative" type="button" disabled>Selecionar referência leve</button>
+            <p><strong>Maior fitness individual v2 observado:</strong> 28,1667 no snapshot do schema de desenvolvimento consultado em 1/11/2026, empate entre H64 G0 genoma #79 e referência 4→6→4 G1 genoma #99, com duas avaliações cada. São registros históricos; as gerações desses experimentos estão fechadas e não aparecem como opções jogáveis.</p>
+            <p><strong>Genoma com combate demonstrado:</strong> rede local 4→8→4 <code>lab_new_mvx9gl5o_fada0840</code>, G0 genoma #113. Na partida headless, 25/388 ofertas ATTACK repetidas foram aplicadas; eventos da sessão registraram 23 de dano ao jogador, 20 recebidos e uma morte NPC. Fitness: -30,9833. Era uma população inicial aleatória, não uma rede treinada; os eventos não identificam causalmente uma oferta específica. O registro só existe no schema local do experimento.</p>
+            <p class="lab-note">A latência é mostrada por decisão ao vivo; ações aplicadas, rejeitadas e fallbacks são contados no resumo/ACK da sessão. O seletor de genoma exibe o fitness legado e a quantidade de avaliações v2, não o fitness calculado nessas avaliações. Nenhuma dessas métricas compõe um ranking automático.</p>
           </div>
           <h3>Arquitetura utilizável na próxima sessão</h3>
           <label class="field"><span>Arquitetura</span><select id="lab-architecture-select" disabled><option>Conecte o MySQL para listar</option></select></label>
@@ -394,8 +397,8 @@ const neuralLabState = {
   selectedGameGenomeId: storedGenomePreference?.genomeId ?? null,
   selectedGameGenomeArchitecture: storedGenomePreference?.architectureName ?? null,
   populationTargetName: null,
-  recommendedCandidate: null,
-  recommendedAlternative: null,
+  h32Candidate: null,
+  lightReference: null,
   latestDecision: null,
   liveGenome: null,
   activationOffset: 0,
@@ -468,16 +471,16 @@ function selectedLabArchitecture() {
   ) ?? null;
 }
 
-function findRecommendation(topology) {
+function findPlayableGenerationOne(topology) {
   const architecture = findPlayableArchitecture(neuralLabState.architectures, topology);
   return Number(architecture?.playable_generation) === 1 ? architecture : null;
 }
 
-function updateLabRecommendations() {
-  const candidate = findRecommendation([4, 32, 4]);
-  const alternative = findRecommendation([4, 6, 4]);
-  neuralLabState.recommendedCandidate = candidate;
-  neuralLabState.recommendedAlternative = alternative;
+function updateLabEvidenceChoices() {
+  const candidate = findPlayableGenerationOne([4, 32, 4]);
+  const alternative = findPlayableGenerationOne([4, 6, 4]);
+  neuralLabState.h32Candidate = candidate;
+  neuralLabState.lightReference = alternative;
   labRecommendedCandidate.textContent = candidate
     ? `${candidate.architecture_name} · ${candidate.genome_count} genomas utilizáveis`
     : 'não disponível no catálogo com geração 1 utilizável';
@@ -690,7 +693,7 @@ async function loadLabGenomes() {
   for (const genome of neuralLabState.genomes) {
     const evaluationCount = Number(genome.real_evaluation_count) || 0;
     addLabOption(labGenomeSelect, genome.genome_id,
-      `#${genome.genome_id} · fitness ${Number(genome.fitness).toFixed(4)} · ${evaluationCount} avaliações v2 persistidas`);
+      `#${genome.genome_id} · fitness legado ${Number(genome.fitness).toFixed(4)} · ${evaluationCount} avaliações de proveniência v2`);
   }
   labGenomeSelect.disabled = !neuralLabState.genomes.length;
   const pinnedGenome = neuralLabState.genomes.find((genome) => (
@@ -737,7 +740,7 @@ async function loadLabArchitectures(preferredName = null) {
     const payload = await labRequest('/architectures');
     neuralLabState.architectures = payload.architectures ?? [];
     neuralLabState.configuredDefault = payload.configured_default ?? null;
-    updateLabRecommendations();
+    updateLabEvidenceChoices();
     updatePopulationTargets(preferredName);
     labArchitectureSelect.replaceChildren();
     const playableArchitectures = neuralLabState.architectures.filter(isPlayableArchitecture);
@@ -760,13 +763,15 @@ async function loadLabArchitectures(preferredName = null) {
     const activeSessionArchitecture = aiBridgeState.sessionArchitectureLocked
       ? neuralLabState.latestDecision?.architectureName || neuralLabState.selectedArchitectureName
       : null;
-    const requested = activeSessionArchitecture
-      || preferredName
-      || neuralLabState.selectedArchitectureName
-      || neuralLabState.configuredDefault;
-    const selected = playableArchitectures.find((architecture) => architecture.architecture_name === requested)
-      ?? neuralLabState.recommendedCandidate
-      ?? neuralLabState.recommendedAlternative
+    const requestedArchitectureNames = [
+      activeSessionArchitecture,
+      preferredName,
+      neuralLabState.selectedArchitectureName,
+      neuralLabState.configuredDefault,
+    ].filter((name) => typeof name === 'string' && name.length > 0);
+    const selected = requestedArchitectureNames
+      .map((name) => playableArchitectures.find((architecture) => architecture.architecture_name === name))
+      .find(Boolean)
       ?? playableArchitectures[0];
     neuralLabState.selectedArchitectureName = selected.architecture_name;
     neuralLabState.selectedArchitectureId = selected.architecture_id;
@@ -1340,7 +1345,7 @@ async function finishAiSession() {
   aiBridgeState.sessionArchitectureLocked = false;
   labArchitectureSelect.disabled = !neuralLabState.architectures.some(isPlayableArchitecture);
   updateGameGenomePinControl();
-  updateLabRecommendations();
+  updateLabEvidenceChoices();
   return closed;
 }
 
@@ -1365,7 +1370,7 @@ function requestBackendDecision(npcState) {
   aiBridgeState.sessionArchitectureLocked = true;
   labArchitectureSelect.disabled = true;
   updateGameGenomePinControl();
-  updateLabRecommendations();
+  updateLabEvidenceChoices();
   const performanceStartedAt = performance.now();
   aiBridgeState.inflight.set(requestId, {
     npcState,
@@ -1866,10 +1871,10 @@ labArchitectureSelect.addEventListener('change', () => {
   void loadLabArchitectureDetails();
 });
 labApplyRecommended.addEventListener('click', () => {
-  void applyRecommendedArchitecture(neuralLabState.recommendedCandidate);
+  void applyRecommendedArchitecture(neuralLabState.h32Candidate);
 });
 labApplyAlternative.addEventListener('click', () => {
-  void applyRecommendedArchitecture(neuralLabState.recommendedAlternative);
+  void applyRecommendedArchitecture(neuralLabState.lightReference);
 });
 labPinGenome.addEventListener('click', () => {
   if (aiBridgeState.sessionArchitectureLocked) {
