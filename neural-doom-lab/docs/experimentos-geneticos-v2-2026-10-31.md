@@ -4,7 +4,7 @@
 
 Foram criados quatro experimentos isolados no schema `neural_doom_local_game_20261024`: referência `4→6→4`, além de `4→32→4`, `4→64→4` e `4→64→32→64→4`. Cada população inicial tem 8 genomas, seed genética `20261031`, mutação `0.05`, duas gerações planejadas e duas avaliações por genoma. As quatro entradas e saídas reais do engine foram mantidas.
 
-As partidas usaram Freedoom 2 E1M1, skill 2, 20 segundos de controles fixos automatizados, Edge headless e um contexto Playwright isolado. O backend experimental foi reiniciado sequencialmente por arquitetura na porta 8001; o backend existente na porta 8000 não foi substituído. O runner salvou uma captura de tela e um JSON por partida em `%TEMP%\neural-doom-genetic-experiments-v2`.
+As partidas usaram Freedoom 2 MAP01, skill 2, 20 segundos de controles fixos automatizados, Edge headless e um contexto Playwright isolado. Relatórios anteriores chamavam o mapa de E1M1; o engine registrou `startmap: 1` e `startepisode: 1` com Freedoom 2, então o rótulo foi corrigido. O backend experimental foi reiniciado sequencialmente por arquitetura na porta 8001; o backend existente na porta 8000 não foi substituído. O runner salvou uma captura de tela e um JSON por partida em `%TEMP%\neural-doom-genetic-experiments-v2`.
 
 A seed controla a população genética. O bundle atual não permite fixar a seed aleatória do Freedoom, então mapas, encontros e resultados de gerações não são plenamente controlados. As médias abaixo descrevem as partidas realizadas e **não comprovam melhora de aprendizado**.
 

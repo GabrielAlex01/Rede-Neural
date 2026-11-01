@@ -2,7 +2,7 @@
 
 ## Escopo e método
 
-As partidas foram executadas no Freedoom 2, mapa E1M1, skill 2, por 75 s, em Microsoft Edge headless isolado. Um script controlou o jogador com uma sequência fixa de setas, Espaço, Ctrl e Shift; portanto foram partidas automatizadas, não partidas humanas nem agentes que aprenderam a jogar. O fluxo observado foi jogo → WebSocket → FastAPI temporário → procedures MySQL → resposta ao engine. As sessões foram fechadas pelo handshake e as avaliações vieram de eventos de combate persistidos pelo engine.
+As partidas foram executadas no Freedoom 2, MAP01, skill 2, por 75 s, em Microsoft Edge headless isolado. Um script controlou o jogador com uma sequência fixa de setas, Espaço, Ctrl e Shift; portanto foram partidas automatizadas, não partidas humanas nem agentes que aprenderam a jogar. O fluxo observado foi jogo → WebSocket → FastAPI temporário → procedures MySQL → resposta ao engine. As sessões foram fechadas pelo handshake e as avaliações vieram de eventos de combate persistidos pelo engine. Relatórios antigos chamavam o mapa de E1M1; o engine registrou `startmap: 1` e `startepisode: 1` com Freedoom 2, então este histórico foi corrigido para MAP01.
 
 O schema utilizado foi somente `neural_doom_local_game_20261024`. O seed da população/evolução foi fixado por experimento; o seed aleatório interno do Freedoom não é configurável no bundle atual. A quantidade e a distribuição dos NPCs variaram entre 10 e 17 por sessão. Assim, gerações e arquiteturas têm a mesma configuração nominal, mas os confrontos não são perfeitamente pareados. Cada genoma da geração 0 e das gerações 1 completas recebeu duas avaliações reais; a arquitetura de referência `npc_teste_4_6_4` permaneceu intacta.
 

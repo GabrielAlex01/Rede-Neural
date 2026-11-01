@@ -16,7 +16,7 @@ O cadastro inicial usa `INSERT IGNORE`, e o encerramento reaproveita o token já
 
 ## Partida automatizada headless
 
-Registro: `2026-10-31T22-29-04.055Z`, sessão `c0b73447-0d00-4137-a22e-fd82803b897c`. Foi uma partida automatizada por Playwright/Edge headless em Freedoom 2, E1M1, skill 2, com EXTERNAL_AI e MySQL. O script controla o jogador pelo contexto isolado do navegador e salvou JSON e screenshot no diretório temporário `neural-doom-results-v2`. Não houve janela na área de trabalho.
+Registro: `2026-10-31T22-29-04.055Z`, sessão `c0b73447-0d00-4137-a22e-fd82803b897c`. Foi uma partida automatizada por Playwright/Edge headless em Freedoom 2 MAP01, skill 2, com EXTERNAL_AI e MySQL. O script controla o jogador pelo contexto isolado do navegador e salvou JSON e screenshot no diretório temporário `neural-doom-results-v2`. Não houve janela na área de trabalho. Relatórios anteriores chamavam o mapa de E1M1; os logs `startmap: 1`/`startepisode: 1` motivaram a correção do rótulo.
 
 | Medida | Resultado observado |
 |---|---:|
