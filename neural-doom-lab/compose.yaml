@@ -1,0 +1,79 @@
+name: neural-doom-lab
+
+services:
+  mysql:
+    image: mysql:8.0.46
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run scripts/setup.ps1 -Mode Docker first}
+      MYSQL_ROOT_HOST: "%"
+      TZ: UTC
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    ports:
+      - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_HOST_PORT:-13306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --host=127.0.0.1 --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 20s
+    restart: unless-stopped
+
+  database-setup:
+    image: mysql:8.0.46
+    entrypoint: ["/bin/sh", "/opt/neural/runner/install-database.sh"]
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run scripts/setup.ps1 -Mode Docker first}
+      NN_DB_USER: ${NN_DB_USER:?Run scripts/setup.ps1 -Mode Docker first}
+      NN_DB_PASSWORD: ${NN_DB_PASSWORD:?Run scripts/setup.ps1 -Mode Docker first}
+    volumes:
+      - ./database:/opt/neural/project/database:ro
+      - ./scripts/database-install-plan.tsv:/opt/neural/plan.tsv:ro
+      - ./docker/install-database.sh:/opt/neural/runner/install-database.sh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      NN_DB_HOST: mysql
+      NN_DB_PORT: "3306"
+      NN_DB_USER: ${NN_DB_USER:?Run scripts/setup.ps1 -Mode Docker first}
+      NN_DB_PASSWORD: ${NN_DB_PASSWORD:?Run scripts/setup.ps1 -Mode Docker first}
+      NN_DB_NAME: neural_doom_local_game_20261024
+      NN_ARCHITECTURE_NAME: ${NN_ARCHITECTURE_NAME:-genetic_v2_ref46_20261031}
+    ports:
+      - "${DOOM_BIND_ADDRESS:-127.0.0.1}:${DOOM_API_PORT:-8000}:8000"
+    depends_on:
+      database-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      VITE_AI_WEBSOCKET_URL: ${VITE_AI_WEBSOCKET_URL:-}
+    ports:
+      - "${DOOM_BIND_ADDRESS:-127.0.0.1}:${DOOM_WEB_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

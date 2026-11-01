@@ -1,11 +1,26 @@
 import './styles.css';
+import { resolveAiWebSocketUrl } from './ai-url.js';
+import {
+  createAiMetrics,
+  formatAiMetrics,
+  recordEngineOffer,
+  recordEngineResult,
+  recordFallback,
+  recordInvalidSqlResponse,
+  recordOpportunity,
+  recordSqlDecision,
+  snapshotAiMetrics,
+} from './ai-metrics.js';
 
 const STORAGE_KEY = 'doomwasm.selection';
 const DEFAULT_IWAD_PATH = '/iwads/freedoom2.wad';
 const DEFAULT_IWAD_NAME = 'freedoom2.wad';
 const ENGINE_MODULE_URL = `${import.meta.env.BASE_URL}engine/chocolate-doom.js`;
 const ENGINE_FILE_BASE = `${import.meta.env.BASE_URL}engine/`;
-const AI_WEBSOCKET_URL = 'ws://127.0.0.1:8000/ws/ai';
+const AI_WEBSOCKET_URL = resolveAiWebSocketUrl(
+  window.location,
+  import.meta.env.VITE_AI_WEBSOCKET_URL,
+);
 const AI_MODE = Object.freeze({ ORIGINAL_AI: 0, EXTERNAL_AI: 1 });
 const AI_ACTION = Object.freeze({
   INVALID: -1,
@@ -113,8 +128,8 @@ app.innerHTML = `
         <label class="field">
           <span>Fonte de decisão</span>
           <select id="ai-provider">
-            <option value="backend">WebSocket backend (mock)</option>
-            <option value="local">Local mock</option>
+            <option value="backend">MySQL neural (via backend)</option>
+            <option value="local">Local mock (desenvolvimento)</option>
           </select>
         </label>
       </section>
@@ -125,7 +140,7 @@ app.innerHTML = `
           <span class="signal-dot" aria-hidden="true"></span>
           <div><small>WebSocket bridge</small><strong id="ai-debug-backend">Disconnected</strong></div>
         </div>
-        <code>ws://127.0.0.1:8000/ws/ai</code>
+        <code>${AI_WEBSOCKET_URL}</code>
       </section>
 
       <section class="panel npc-panel" id="npc-status">
@@ -135,6 +150,7 @@ app.innerHTML = `
           <div><dt>NPC</dt><dd id="ai-debug-npc">—</dd></div>
           <div><dt>State</dt><dd id="ai-debug-state">—</dd></div>
           <div><dt>Action</dt><dd id="ai-debug-action">Original engine</dd></div>
+          <div><dt>Resumo da sessão</dt><dd id="ai-debug-metrics">Aguardando partida com MySQL neural</dd></div>
         </dl>
       </section>
 
@@ -188,6 +204,8 @@ const state = {
   cachedUploads: [],
   engine: null,
   running: false,
+  sessionId: null,
+  telemetryQueue: [],
 };
 
 const playButton = document.querySelector('#play-button');
@@ -211,6 +229,7 @@ const aiDebugMode = document.querySelector('#ai-debug-mode');
 const aiDebugNpc = document.querySelector('#ai-debug-npc');
 const aiDebugState = document.querySelector('#ai-debug-state');
 const aiDebugAction = document.querySelector('#ai-debug-action');
+const aiDebugMetrics = document.querySelector('#ai-debug-metrics');
 const aiDebugBackend = document.querySelector('#ai-debug-backend');
 const connectionStatus = document.querySelector('.connection-status');
 const clearLogButton = document.querySelector('#clear-log-button');
@@ -255,13 +274,92 @@ const aiBridgeState = {
   decisions: new Map(),
   inflight: new Map(),
   lastFallbackLogAt: 0,
-  lastRequestAt: 0,
+  lastRequestAtByNpc: new Map(),
   lastResultLogAt: 0,
+  metrics: createAiMetrics(),
+  metricsTimer: null,
   pending: new Map(),
   reconnectTimer: null,
   requestSequence: 0,
   socket: null,
 };
+
+function updateAiMetricsDisplay(metrics = aiBridgeState.metrics) {
+  aiDebugMetrics.textContent = formatAiMetrics(metrics);
+}
+
+function sendActionMetricsSnapshot(sessionId = state.sessionId, { force = false } = {}) {
+  if (
+    !sessionId
+    || (!force && aiProvider.value !== 'backend')
+    || aiBridgeState.socket?.readyState !== WebSocket.OPEN
+  ) {
+    return false;
+  }
+
+  aiBridgeState.socket.send(JSON.stringify({
+    type: 'action_metrics',
+    session_id: sessionId,
+    metrics: snapshotAiMetrics(aiBridgeState.metrics),
+  }));
+  return true;
+}
+
+function startAiMetricsSync() {
+  if (aiBridgeState.metricsTimer) {
+    window.clearInterval(aiBridgeState.metricsTimer);
+  }
+
+  updateAiMetricsDisplay();
+  sendActionMetricsSnapshot();
+  aiBridgeState.metricsTimer = window.setInterval(() => {
+    updateAiMetricsDisplay();
+    sendActionMetricsSnapshot();
+  }, 2000);
+}
+
+function stopAiMetricsSync() {
+  if (aiBridgeState.metricsTimer) {
+    window.clearInterval(aiBridgeState.metricsTimer);
+    aiBridgeState.metricsTimer = null;
+  }
+}
+
+function flushTelemetryQueue() {
+  if (aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  while (state.telemetryQueue.length) {
+    const message = state.telemetryQueue.shift();
+    if (message.session_id === state.sessionId) {
+      aiBridgeState.socket.send(JSON.stringify(message));
+    }
+  }
+}
+
+function sendCombatTelemetry(event) {
+  if (!state.sessionId) {
+    return;
+  }
+
+  const message = {
+    type: 'combat_event',
+    session_id: state.sessionId,
+    event,
+  };
+
+  if (aiBridgeState.socket?.readyState === WebSocket.OPEN) {
+    aiBridgeState.socket.send(JSON.stringify(message));
+    return;
+  }
+
+  if (state.telemetryQueue.length >= 500) {
+    state.telemetryQueue.shift();
+    appendLog('error', '[AI BRIDGE] fila de telemetria cheia; um evento antigo foi descartado.');
+  }
+  state.telemetryQueue.push(message);
+}
 
 function setBackendStatus(status) {
   connectionStatus.dataset.status = status.startsWith('Connected')
@@ -309,11 +407,53 @@ function connectAiBackend() {
 
   socket.addEventListener('open', () => {
     setBackendStatus('Connected');
+    flushTelemetryQueue();
+    sendActionMetricsSnapshot();
   });
 
   socket.addEventListener('message', (event) => {
     try {
       const response = JSON.parse(event.data);
+
+      if (response.type === 'combat_event_ack') {
+        if (!response.stored) {
+          appendLog('error', `[AI BRIDGE] evento de combate não persistido (${response.reason ?? 'erro'}).`);
+        }
+        return;
+      }
+
+      if (response.type === 'session_end_ack') {
+        if (response.session_id === state.sessionId && response.action_metrics) {
+          updateAiMetricsDisplay(response.action_metrics);
+        }
+        if (response.closed === true && typeof response.ack_token === 'string') {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+              type: 'session_end_ack_receipt',
+              session_id: response.session_id,
+              ack_token: response.ack_token,
+            }));
+          } else {
+            appendLog('error', '[AI BRIDGE] conexão fechou antes da confirmação do ACK de treinamento.');
+          }
+        }
+        return;
+      }
+
+      if (response.type === 'session_end_ack_receipt_ack') {
+        if (response.confirmed === false) {
+          appendLog('error', '[AI BRIDGE] MySQL não confirmou o recebimento do ACK de treinamento.');
+        }
+        return;
+      }
+
+      if (response.type === 'action_metrics_ack') {
+        if (response.accepted === false) {
+          appendLog('error', '[AI BRIDGE] backend rejeitou o resumo de ações da sessão.');
+        }
+        return;
+      }
+
       const pendingRequest = aiBridgeState.inflight.get(response.request_id);
       aiBridgeState.inflight.delete(response.request_id);
 
@@ -325,11 +465,15 @@ function connectAiBackend() {
         && action !== AI_ACTION.INVALID;
 
       if (!validResponse) {
+        if (pendingRequest && pendingRequest.sessionId === state.sessionId) {
+          recordInvalidSqlResponse(aiBridgeState.metrics);
+        }
         aiBridgeState.decisions.delete(response.npc_id);
         appendLog('error', '[AI BRIDGE] invalid backend response; ORIGINAL_AI fallback active.');
         return;
       }
 
+      recordSqlDecision(aiBridgeState.metrics, response.action);
       aiBridgeState.decisions.set(response.npc_id, {
         action,
         npcState: pendingRequest.npcState,
@@ -348,6 +492,7 @@ function connectAiBackend() {
     aiBridgeState.socket = null;
     aiBridgeState.decisions.clear();
     aiBridgeState.inflight.clear();
+    aiBridgeState.lastRequestAtByNpc.clear();
     setBackendStatus('Disconnected — fallback active');
     scheduleBackendReconnect();
   });
@@ -369,22 +514,109 @@ function disconnectAiBackend(status = 'Disconnected') {
   aiBridgeState.socket = null;
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
+  aiBridgeState.lastRequestAtByNpc.clear();
   setBackendStatus(status);
+}
+
+async function waitForAiRequestsToDrain(timeoutMs = 1700) {
+  const deadline = Date.now() + timeoutMs;
+  while (aiBridgeState.inflight.size > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+
+  if (aiBridgeState.inflight.size > 0) {
+    appendLog('info', `[AI BRIDGE] encerrando com ${aiBridgeState.inflight.size} decisão(ões) ainda sem resposta.`);
+  }
+}
+
+async function finishAiSession() {
+  const sessionId = state.sessionId;
+  const socket = aiBridgeState.socket;
+  let closed = false;
+
+  stopAiMetricsSync();
+  if (sessionId) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      await waitForAiRequestsToDrain();
+    }
+    if (socket?.readyState === WebSocket.OPEN) {
+      closed = await new Promise((resolve) => {
+        let awaitingReceipt = false;
+        const timeout = window.setTimeout(() => finish(false), 4500);
+        const onMessage = (event) => {
+          try {
+            const response = JSON.parse(event.data);
+            if (response.type === 'session_end_ack' && response.session_id === sessionId) {
+              if (response.closed !== true) {
+                finish(false);
+              } else if (typeof response.ack_token === 'string') {
+                awaitingReceipt = true;
+              } else {
+                finish(true);
+              }
+            } else if (
+              response.type === 'session_end_ack_receipt_ack'
+              && response.session_id === sessionId
+              && awaitingReceipt
+            ) {
+              finish(response.confirmed === true);
+            }
+          } catch {
+            // The ordinary WebSocket handler logs malformed payloads.
+          }
+        };
+
+        function finish(result) {
+          window.clearTimeout(timeout);
+          socket.removeEventListener('message', onMessage);
+          resolve(result);
+        }
+
+        socket.addEventListener('message', onMessage);
+        flushTelemetryQueue();
+        sendActionMetricsSnapshot(sessionId, { force: true });
+        socket.send(JSON.stringify({ type: 'session_end', session_id: sessionId }));
+      });
+    }
+
+    if (!closed) {
+      appendLog('error', '[AI BRIDGE] sessão não confirmou encerramento no MySQL; confira a conexão antes de treinar.');
+    }
+  }
+
+  if (state.sessionId === sessionId) {
+    state.sessionId = null;
+  }
+  state.telemetryQueue = [];
+  aiBridgeState.decisions.clear();
+  aiBridgeState.inflight.clear();
+  aiBridgeState.lastRequestAtByNpc.clear();
+  return closed;
 }
 
 function requestBackendDecision(npcState) {
   const now = Date.now();
+  const npcId = String(npcState.npc_id);
+  const lastRequestAt = aiBridgeState.lastRequestAtByNpc.get(npcId) ?? 0;
+  const hasInflightRequest = [...aiBridgeState.inflight.values()].some(
+    (request) => String(request.npcState.npc_id) === npcId,
+  );
 
-  if (now - aiBridgeState.lastRequestAt < 250 || aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
+  if (
+    now - lastRequestAt < 250
+    || hasInflightRequest
+    || aiBridgeState.socket?.readyState !== WebSocket.OPEN
+  ) {
     return;
   }
 
   const requestId = `${npcState.npc_id}-${now}-${++aiBridgeState.requestSequence}`;
-  aiBridgeState.lastRequestAt = now;
-  aiBridgeState.inflight.set(requestId, { npcState, sentAt: now });
+  aiBridgeState.lastRequestAtByNpc.set(npcId, now);
+  aiBridgeState.inflight.set(requestId, { npcState, sentAt: now, sessionId: state.sessionId });
   aiBridgeState.socket.send(JSON.stringify({
     type: 'npc_state',
     request_id: requestId,
+    session_id: state.sessionId,
     npc: npcState,
   }));
 }
@@ -400,16 +632,29 @@ function renderAiState(npcState, actionLabel) {
 globalThis.doomNeuralAIBridge = {
   decide(npcState) {
     if (aiProvider.value === 'backend') {
+      recordOpportunity(aiBridgeState.metrics);
       connectAiBackend();
       requestBackendDecision(npcState);
 
       const decision = aiBridgeState.decisions.get(npcState.npc_id);
       if (decision && Date.now() - decision.receivedAt <= 1000) {
-        aiBridgeState.pending.set(npcState.npc_id, { action: decision.action, npcState });
-        return decision.action;
+        const actionName = AI_ACTION_NAME[decision.action];
+        if (recordEngineOffer(aiBridgeState.metrics, actionName)) {
+          aiBridgeState.pending.set(npcState.npc_id, {
+            action: decision.action,
+            actionName,
+            npcState,
+            source: 'backend',
+          });
+          return decision.action;
+        }
       }
 
       const now = Date.now();
+      const fallbackReason = aiBridgeState.socket?.readyState === WebSocket.OPEN
+        ? 'waiting_for_mysql'
+        : 'backend_offline';
+      recordFallback(aiBridgeState.metrics, fallbackReason);
 
       if (now - aiBridgeState.lastFallbackLogAt >= 1000) {
         const reason = aiBridgeState.socket?.readyState === WebSocket.OPEN
@@ -424,7 +669,12 @@ globalThis.doomNeuralAIBridge = {
     }
 
     const action = mockDecisionProvider(npcState);
-    aiBridgeState.pending.set(npcState.npc_id, { action, npcState });
+    aiBridgeState.pending.set(npcState.npc_id, {
+      action,
+      actionName: AI_ACTION_NAME[action],
+      npcState,
+      source: 'local',
+    });
     return action;
   },
 
@@ -435,12 +685,16 @@ globalThis.doomNeuralAIBridge = {
       return;
     }
 
+    if (pending.source === 'backend') {
+      recordEngineResult(aiBridgeState.metrics, pending.actionName, result.applied);
+    }
+
     const now = Date.now();
 
     if (now - aiBridgeState.lastResultLogAt >= 1000) {
       const actionName = AI_ACTION_NAME[result.action] ?? 'INVALID';
       const outcome = result.applied ? 'applied by engine' : 'rejected; ORIGINAL_AI fallback';
-      const source = aiProvider.value === 'backend' ? 'backend' : 'local mock';
+      const source = aiProvider.value === 'backend' ? 'MySQL' : 'local mock';
       appendLog('info', `[AI BRIDGE] NPC ${result.npc_id}: state received → ${source} ${actionName} → ${outcome}.`);
       renderAiState(pending.npcState, `${actionName} (${outcome})`);
       aiBridgeState.lastResultLogAt = now;
@@ -451,6 +705,19 @@ globalThis.doomNeuralAIBridge = {
 
   reportError(error) {
     appendLog('error', `[AI BRIDGE] ${error instanceof Error ? error.message : String(error)}`);
+  },
+
+  reportCombatEvent(event) {
+    try {
+      sendCombatTelemetry({
+        event_id: globalThis.crypto.randomUUID(),
+        npc_id: event.npc_id,
+        event_type: event.event_type,
+        value: event.value,
+      });
+    } catch (error) {
+      appendLog('error', `[AI BRIDGE] falha ao identificar evento de combate: ${error}`);
+    }
   },
 };
 
@@ -464,16 +731,26 @@ function syncAiMode({ log = true } = {}) {
   aiProvider.disabled = !isExternal;
 
   if (!isExternal) {
-    disconnectAiBackend('Inativo — selecione EXTERNAL_AI');
+    aiMode.disabled = true;
+    state.engine?._DB_SetAIMode?.(modeValue);
     renderAiState(null, 'Original engine');
+    void finishAiSession().finally(() => {
+      if (aiMode.value === 'original') {
+        disconnectAiBackend('Inativo — selecione EXTERNAL_AI');
+      }
+      aiMode.disabled = false;
+    });
   } else if (aiProvider.value === 'backend') {
+    aiMode.disabled = false;
+    state.sessionId ||= globalThis.crypto.randomUUID();
     connectAiBackend();
   } else {
+    aiMode.disabled = false;
     disconnectAiBackend();
     setBackendStatus('Local mock selected');
   }
 
-  if (state.engine?._DB_SetAIMode) {
+  if (isExternal && state.engine?._DB_SetAIMode) {
     state.engine._DB_SetAIMode(modeValue);
   }
 
@@ -685,6 +962,15 @@ async function launchEngine() {
 
   const selection = classifyUploads(state.cachedUploads, wadMode.value);
   const args = buildCliArgs(selection);
+  state.sessionId = globalThis.crypto.randomUUID();
+  state.telemetryQueue = [];
+  stopAiMetricsSync();
+  aiBridgeState.metrics = createAiMetrics();
+  aiBridgeState.pending.clear();
+  aiBridgeState.lastRequestAtByNpc.clear();
+  updateAiMetricsDisplay();
+  aiBridgeState.decisions.clear();
+  aiBridgeState.inflight.clear();
 
   setStatus('Booting', 'busy');
   appendLog('info', `Launching Chocolate Doom with args: ${args.join(' ')}`);
@@ -727,6 +1013,7 @@ async function launchEngine() {
     }
 
     state.running = true;
+    startAiMetricsSync();
     canvas.focus();
     setStatus('Running', 'running');
     updateButtons();
@@ -774,12 +1061,30 @@ wadInput.addEventListener('change', async (event) => {
 aiMode.addEventListener('change', () => syncAiMode());
 aiProvider.addEventListener('change', () => {
   if (aiProvider.value === 'backend') {
+    if (aiMode.value === 'external') {
+      state.sessionId ||= globalThis.crypto.randomUUID();
+    }
     connectAiBackend();
   } else {
-    disconnectAiBackend();
-    setBackendStatus('Local mock selected');
+    void finishAiSession().finally(() => {
+      disconnectAiBackend();
+      setBackendStatus('Local mock selected');
+    });
   }
   appendLog('info', `[AI BRIDGE] decision source set to ${aiProvider.value}.`);
+});
+
+window.addEventListener('pagehide', () => {
+  if (!state.sessionId || aiBridgeState.socket?.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  flushTelemetryQueue();
+  sendActionMetricsSnapshot(state.sessionId, { force: true });
+  aiBridgeState.socket.send(JSON.stringify({
+    type: 'session_end',
+    session_id: state.sessionId,
+  }));
 });
 
 canvas.addEventListener('click', () => {

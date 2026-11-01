@@ -1,2 +1,4 @@
 fastapi>=0.128,<1
 uvicorn[standard]>=0.40,<1
+mysql-connector-python>=9.5,<10
+python-dotenv>=1,<2

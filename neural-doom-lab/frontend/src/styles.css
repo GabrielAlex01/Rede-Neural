@@ -449,6 +449,7 @@ a { color: inherit; }
 .session-data div { display: grid; grid-template-columns: minmax(4.2rem, 0.8fr) minmax(0, 1.35fr); gap: 0.55rem; padding: 0.3rem 0; font-size: clamp(0.68rem, 0.64rem + 0.12vw, 0.78rem); }
 .ai-debug dt, .session-data dt { color: #8d9899; }
 .ai-debug dd, .session-data dd { margin: 0; color: #d8dddc; overflow-wrap: anywhere; }
+#ai-debug-metrics { white-space: pre-wrap; font-size: 0.64rem; line-height: 1.4; }
 
 .live-value { display: flex; align-items: center; gap: 0.55rem; color: var(--acid) !important; }
 .live-value i { width: 8px; height: 8px; }

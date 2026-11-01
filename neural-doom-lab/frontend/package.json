@@ -5,9 +5,16 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/ai-metrics.test.js src/ai-url.test.js",
+    "test:match": "node scripts/automated-match.mjs",
+    "test:experiments": "node scripts/run-architecture-experiments.mjs"
   },
   "devDependencies": {
+    "playwright-core": "^1.64.1",
     "vite": "^5.4.14"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
   }
 }
