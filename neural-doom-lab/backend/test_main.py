@@ -56,9 +56,9 @@ class StubService:
         if self.health_error:
             raise self.health_error
 
-    def decide(self, session_id, npc, architecture_name=None):
+    def decide(self, session_id, npc, architecture_name=None, genome_id=None):
         validate_observation(session_id, npc)
-        self.calls.append((session_id, npc, architecture_name))
+        self.calls.append((session_id, npc, architecture_name, genome_id))
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
         if self.error:
@@ -259,6 +259,31 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertEqual(cursor.calls[0][1][0], "lab_4_32_4")
         self.assertEqual(decision["architecture_name"], "lab_4_32_4")
 
+    def test_selected_genome_is_bound_before_mysql_inference(self):
+        cursor = FakeCursor((54, "CHASE", 0.82))
+        service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
+
+        decision = service.decide(SESSION_ID, NPC, "lab_4_32_4", 81)
+
+        self.assertEqual(
+            cursor.calls[0],
+            (
+                "sp_nn_select_session_genome_v2",
+                ("lab_4_32_4", SESSION_ID, "3052044", 12, 80, 100, 81),
+            ),
+        )
+        self.assertEqual(cursor.calls[1][0], "sp_nn_decide_for_architecture")
+        self.assertEqual(cursor.calls[1][1][0], "lab_4_32_4")
+        self.assertEqual(decision["run_id"], 54)
+
+    def test_selected_genome_id_is_validated_before_mysql(self):
+        cursor = FakeCursor((54, "CHASE", 0.82))
+        service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
+
+        with self.assertRaises(ValueError):
+            service.decide(SESSION_ID, NPC, "lab_4_32_4", True)
+        self.assertEqual(cursor.calls, [])
+
     def test_lab_reads_and_writes_use_fixed_procedures_and_bound_parameters(self):
         cursor = FakeCursor(())
         service = DatabaseDecisionService(FakePool(FakeConnection(cursor)))
@@ -452,6 +477,46 @@ class WebSocketBridgeTests(unittest.TestCase):
                     self.assertEqual(responses[0]["reason"], "architecture_locked_for_session")
         self.assertEqual(service.calls[0][2], "lab_4_32_4")
         self.assertEqual(len(service.calls), 1)
+
+    def test_selected_genome_is_locked_for_the_lifetime_of_a_session(self):
+        service = StubService()
+        client = TestClient(create_app(service))
+        with client.websocket_connect("/ws/ai") as websocket:
+            for request_id, genome_id in (("genome-1", 81), ("genome-2", 81), ("genome-3", 82)):
+                websocket.send_json({
+                    "type": "npc_state",
+                    "request_id": request_id,
+                    "session_id": SESSION_ID,
+                    "architecture_name": "lab_4_32_4",
+                    "genome_id": genome_id,
+                    "npc": NPC,
+                })
+                response = websocket.receive_json()
+                self.assertEqual(response["request_id"], request_id)
+                if request_id == "genome-3":
+                    self.assertEqual(response["reason"], "genome_locked_for_session")
+                else:
+                    self.assertEqual(response["action"], "CHASE")
+
+        self.assertEqual([call[3] for call in service.calls], [81, 81])
+        self.assertEqual(len(service.calls), 2)
+
+    def test_genome_selection_must_be_a_positive_integer(self):
+        service = StubService()
+        client = TestClient(create_app(service))
+        with client.websocket_connect("/ws/ai") as websocket:
+            websocket.send_json({
+                "type": "npc_state",
+                "request_id": "bad-genome",
+                "session_id": SESSION_ID,
+                "architecture_name": "lab_4_32_4",
+                "genome_id": True,
+                "npc": NPC,
+            })
+            response = websocket.receive_json()
+
+        self.assertEqual(response["reason"], "invalid_genome_selection")
+        self.assertEqual(service.calls, [])
 
     def test_mysql_failure_returns_invalid_for_engine_fallback(self):
         client = TestClient(create_app(StubService(error=DecisionError("offline"))))

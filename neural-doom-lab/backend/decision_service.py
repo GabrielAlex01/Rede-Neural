@@ -33,7 +33,13 @@ class ConnectionPool(Protocol):
 
 class DecisionService(Protocol):
     def check_health(self) -> None: ...
-    def decide(self, session_id: Any, npc: Any, architecture_name: Any = None) -> dict[str, Any]: ...
+    def decide(
+        self,
+        session_id: Any,
+        npc: Any,
+        architecture_name: Any = None,
+        genome_id: Any = None,
+    ) -> dict[str, Any]: ...
     def record_combat_event(self, session_id: Any, event: Any) -> None: ...
     def close_session(self, session_id: Any) -> str | None: ...
     def confirm_training_ack(self, session_id: Any, ack_token: Any) -> None: ...
@@ -191,6 +197,7 @@ class DatabaseDecisionService:
         session_id: Any,
         npc: Any,
         architecture_name: Any = None,
+        genome_id: Any = None,
     ) -> dict[str, Any]:
         canonical_session_id, observation = validate_observation(session_id, npc)
         if architecture_name is not None:
@@ -204,6 +211,8 @@ class DatabaseDecisionService:
         else:
             requested_architecture = self._architecture_name
         effective_architecture = requested_architecture or "npc_teste_4_6_4"
+        if genome_id is not None:
+            genome_id = _integer(genome_id, "genome_id", minimum=1, maximum=2_147_483_647)
         connection = None
         cursor = None
         started_at = time.perf_counter()
@@ -212,6 +221,19 @@ class DatabaseDecisionService:
         try:
             connection = self._get_pool().get_connection()
             cursor = connection.cursor()
+            if genome_id is not None:
+                cursor.callproc(
+                    "sp_nn_select_session_genome_v2",
+                    (
+                        effective_architecture,
+                        canonical_session_id,
+                        observation.engine_npc_id,
+                        observation.npc_type,
+                        observation.health,
+                        observation.max_health,
+                        genome_id,
+                    ),
+                )
             parameters = (
                 canonical_session_id,
                 observation.engine_npc_id,

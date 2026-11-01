@@ -98,6 +98,7 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
     app.state.decision_service = service or DatabaseDecisionService.from_environment()
     app.state.action_metrics = {}
     app.state.session_architectures = {}
+    app.state.session_selections = {}
     app.state.lab_population_lock = asyncio.Lock()
 
     @app.get("/health")
@@ -378,6 +379,7 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         canonical_session_id = None
                     if closed and canonical_session_id is not None:
                         app.state.session_architectures.pop(canonical_session_id, None)
+                        app.state.session_selections.pop(canonical_session_id, None)
                     metrics = app.state.action_metrics.get(canonical_session_id)
                     await websocket.send_json({
                         "type": "session_end_ack",
@@ -462,6 +464,20 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                     continue
                 if isinstance(requested_architecture, str):
                     requested_architecture = requested_architecture.strip()
+                requested_genome_id = message.get("genome_id")
+                if requested_genome_id is not None and (
+                    isinstance(requested_genome_id, bool)
+                    or not isinstance(requested_genome_id, int)
+                    or not 1 <= requested_genome_id <= 2_147_483_647
+                ):
+                    await websocket.send_json({
+                        "type": "npc_action",
+                        "request_id": request_id,
+                        "npc_id": npc.get("npc_id"),
+                        "action": "INVALID",
+                        "reason": "invalid_genome_selection",
+                    })
+                    continue
                 previous_architecture = app.state.session_architectures.get(canonical_session_id)
                 if (
                     previous_architecture is not None
@@ -476,7 +492,21 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         "reason": "architecture_locked_for_session",
                     })
                     continue
-                selected_architecture = requested_architecture or previous_architecture
+                previous_selection = app.state.session_selections.get(canonical_session_id)
+                if previous_selection is not None and previous_selection["genome_id"] != requested_genome_id:
+                    await websocket.send_json({
+                        "type": "npc_action",
+                        "request_id": request_id,
+                        "npc_id": npc.get("npc_id"),
+                        "action": "INVALID",
+                        "reason": "genome_locked_for_session",
+                    })
+                    continue
+                selected_architecture = (
+                    requested_architecture
+                    or (previous_selection or {}).get("architecture_name")
+                    or previous_architecture
+                )
 
                 try:
                     decision = await asyncio.wait_for(
@@ -485,6 +515,7 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                             session_id,
                             npc,
                             selected_architecture,
+                            requested_genome_id,
                         ),
                         timeout=1.5,
                     )
@@ -556,6 +587,10 @@ def create_app(service: DecisionService | None = None) -> FastAPI:
                         })
                         continue
                     app.state.session_architectures[canonical_session_id] = effective_architecture
+                    app.state.session_selections[canonical_session_id] = {
+                        "architecture_name": effective_architecture,
+                        "genome_id": requested_genome_id,
+                    }
 
                 await websocket.send_json(
                     {
