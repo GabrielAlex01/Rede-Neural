@@ -33,6 +33,8 @@ let sessionId = null;
 let sessionAck = null;
 let sessionReceiptAck = null;
 let engineName = null;
+const selectedArchitectureName = process.env.DOOM_ARCHITECTURE_NAME ?? null;
+const decisions = [];
 
 function parseFrame(payload) {
   const text = typeof payload === 'string' ? payload : payload?.toString?.();
@@ -99,6 +101,13 @@ try {
         const sentAt = frameTimes.get(message.request_id);
         if (sentAt !== undefined) responseLatencies.push(performance.now() - sentAt);
         if (message.action) actions[message.action] = (actions[message.action] ?? 0) + 1;
+        decisions.push({
+          action: message.action,
+          architecture_name: message.architecture_name ?? null,
+          run_id: message.run_id ?? null,
+          mysql_inference_ms: message.mysql_inference_ms ?? null,
+          database_round_trip_ms: message.database_round_trip_ms ?? null,
+        });
       } else if (message.type === 'session_end_ack') {
         sessionAck = message;
       } else if (message.type === 'session_end_ack_receipt_ack') {
@@ -112,6 +121,19 @@ try {
   await page.waitForFunction(
     () => document.querySelector('#ai-debug-backend')?.textContent.includes('Connected'),
   );
+  if (selectedArchitectureName) {
+    await page.locator('.neural-lab-summary').click();
+    await page.waitForFunction(
+      () => document.querySelector('#lab-status')?.textContent.includes('MySQL conectado'),
+      null,
+      { timeout: 10000 },
+    );
+    await page.locator('#lab-architecture-select').selectOption(selectedArchitectureName);
+    await page.waitForFunction(
+      (name) => document.querySelector('#lab-architecture-summary')?.textContent.includes(name),
+      selectedArchitectureName,
+    );
+  }
   await page.locator('#play-button').click();
   await page.waitForFunction(
     () => document.querySelector('#session-engine-state')?.textContent === 'Engine online',
@@ -172,6 +194,10 @@ try {
   const canvasPath = path.join(outputDirectory, `${runId}.png`);
   await mkdir(outputDirectory, { recursive: true });
   await page.locator('#doom-canvas').screenshot({ path: canvasPath });
+  const labScreenshotPath = selectedArchitectureName
+    ? path.join(outputDirectory, `${runId}-lab.png`)
+    : null;
+  if (labScreenshotPath) await page.screenshot({ path: labScreenshotPath, fullPage: true });
   const metricsBeforeClose = await page.locator('#ai-debug-metrics').innerText();
   const gameLogEnd = await page.locator('#log-output').innerText();
   const startSkill = gameLogEnd.match(/startskill\s+(\d+)/i)?.[1] ?? null;
@@ -188,7 +214,8 @@ try {
     run_id: runId,
     frontend_url: baseUrl,
     websocket_url: process.env.DOOM_WS_URL ?? 'ws://127.0.0.1:8000/ws/ai',
-    architecture_name: process.env.NN_ARCHITECTURE_NAME ?? 'npc_teste_4_6_4',
+    architecture_name: selectedArchitectureName ?? process.env.NN_ARCHITECTURE_NAME ?? 'npc_teste_4_6_4',
+    requested_architecture_name: selectedArchitectureName,
     environment: 'Freedoom2 bundle, E1M1, browser Edge headless, EXTERNAL_AI, MySQL backend',
     skill: startSkill === null ? null : Number(startSkill),
     duration_seconds: durationSeconds,
@@ -197,6 +224,7 @@ try {
     npc_state_requests: npcStateRequests,
     decisions_received: Object.values(actions).reduce((sum, count) => sum + count, 0),
     actions_selected_by_sql: actions,
+    decisions,
     ws_round_trip_ms: responseLatencies.length ? {
       count: responseLatencies.length,
       mean: responseLatencies.reduce((sum, value) => sum + value, 0) / responseLatencies.length,
@@ -218,6 +246,16 @@ try {
     } : null,
     engine_start_log: gameLogStart.includes('Engine initialized successfully.'),
     screenshot: canvasPath,
+    neural_laboratory: selectedArchitectureName ? {
+      screenshot: labScreenshotPath,
+      selected_architecture: selectedArchitectureName,
+      live_action: await page.locator('#lab-live-action').innerText(),
+      live_identity: await page.locator('#lab-live-identity').innerText(),
+      engine_result: await page.locator('#lab-live-engine-result').innerText(),
+      latency: await page.locator('#lab-live-latency').innerText(),
+      visible_activation_count: await page.locator('#lab-activations .lab-neuron-row').count(),
+      activation_rows: await page.locator('#lab-activations .lab-neuron-row').allInnerTexts(),
+    } : null,
     browser_errors: pageErrors,
     http_errors: httpErrors,
   };

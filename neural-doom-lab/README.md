@@ -48,6 +48,15 @@ Para Docker Compose, quando o daemon estiver ativo, use `setup.ps1`, `doctor.ps1
 
 O procedimento detalhado para MySQL Workbench, instalação segura, uso pela rede local e transferência por Git bundle está em [`docs/portabilidade-windows.md`](docs/portabilidade-windows.md).
 
+Em um clone limpo, a migration 17 do laboratório entra no plano SQL automaticamente. Em schemas locais antigos e sem o ledger portátil, não use `setup.ps1` para adotá-los: a validação geral para por segurança. Para instalar somente as cinco procedures aditivas do laboratório nesses dois schemas já conferidos, use o login-path do instalador:
+
+```powershell
+cd neural-doom-lab
+.\scripts\Install-Neural-Lab-API.ps1 -InstallerLoginPath neural-doom-installer-20261024
+```
+
+O script verifica previamente MySQL 8.0.46, ambos os nomes de schema, as tabelas e procedures-base. Ele altera somente procedures `sp_nn_lab_*` em `neural_doom_local_game_20261024` e `neural_doom_local_sql_test_20261024`; não adota o ledger, recria schema, concede privilégios nem muda dados existentes. A conta da aplicação continua usando apenas `EXECUTE`.
+
 O inventário das sete topologias testadas, a diferença entre a instalação padrão e o seed histórico opcional, os resultados reais e as consultas de camadas/pesos/genomas no Workbench estão em [`docs/arquiteturas-e-experimentos.md`](docs/arquiteturas-e-experimentos.md).
 
 ## Jogar contra os NPCs
@@ -59,6 +68,33 @@ O inventário das sete topologias testadas, a diferença entre a instalação pa
 5. Se o backend ou o MySQL estiver indisponível, a decisão externa é rejeitada e o NPC permanece na IA original. A resposta precisa chegar dentro do limite de 1,5 s; decisões ausentes/atrasadas usam fallback.
 6. Ao terminar, selecione `ORIGINAL_AI` para encerrar e avaliar a sessão. O fechamento automático ao sair da página é uma tentativa adicional; trocar para `ORIGINAL_AI` com WebSocket conectado é o caminho confiável para aguardar o envio.
 7. O painel **NPC atual → Resumo da sessão** distingue saídas SQL selecionadas, ações entregues ao engine, aplicadas, rejeitadas e oportunidades em que ocorreu fallback. O backend recebe snapshots cumulativos e devolve a contagem no ACK de encerramento; o resumo também é escrito no terminal do backend. `ATTACK` selecionada não significa ataque executado: somente o contador **aplicadas** confirma que o engine aceitou a ação; dano real continua sendo confirmado pelos eventos de combate SQL.
+
+## Laboratório neural interativo
+
+Abra **Laboratório neural interativo** abaixo da área do jogo para consultar dados do MySQL. O painel inicia recolhido e não faz consultas enquanto fechado. Selecione a arquitetura usada na próxima sessão; depois que o primeiro pedido de decisão sair, a seleção fica bloqueada até a sessão terminar. A escolha é salva no navegador e enviada ao FastAPI como parâmetro para a procedure de decisão. Se a topologia ainda não tiver genomas, a própria tela avisa que ela não pode controlar NPCs.
+
+O painel lista arquiteturas, camadas, número de neurônios, gerações e genomas. A geração e o genoma selecionados são para inspeção; a procedure de inferência continua escolhendo os genomas do roster conforme a lógica SQL da sessão. O botão **Usar genoma da última inferência** troca a inspeção para o genoma que o SQL atribuiu de verdade ao NPC.
+
+Ao receber uma decisão com `run_id`, a interface consulta `nn_decision_activation`, que já armazena as ativações calculadas pelo MySQL. As quatro entradas e as quatro saídas aparecem pelos nomes `HEALTH_RATIO`, `PLAYER_DISTANCE_RATIO`, `PLAYER_VISIBLE`, `HEALTH_DELTA`, `IDLE`, `CHASE`, `ATTACK` e `FLEE`; camadas maiores são paginadas, sem transferir toda a rede em cada tick. A área de pesos exibe as conexões de entrada paginadas e o bias do neurônio escolhido, consultados no genoma selecionado. Ações SQL escolhidas, ACK do engine (aplicada/rejeitada/fallback) e três tempos são separados: tempo do `CALL` de inferência medido pelo backend, round trip navegador↔backend e tempo desde a consulta até o retorno de aplicação do engine. As barras são apenas uma escala visual da página; os números exibidos são os valores persistidos.
+
+Criar uma arquitetura passa pela `sp_nn_create_configurable_architecture`; inicializar uma população vazia passa pela `sp_nn_create_seeded_population`. A tela calcula pesos, biases e total de parâmetros antes do envio, preserva as quatro entradas/saídas, limita larguras a 512 e parâmetros a 120.000. Nomes repetidos e populações já existentes são recusados pelo SQL. As operações de escrita exigem origem local autorizada (`127.0.0.1` ou `localhost`) e não expõem credenciais no browser. A seleção manual de um genoma nunca modifica a atribuição de NPCs nem os experimentos existentes.
+
+Para verificar a tela em Edge headless, com um contexto isolado, backend/MySQL locais e screenshot fora do repositório:
+
+```powershell
+cd neural-doom-lab/frontend
+npm run test:neural-lab-ui
+```
+
+O relatório e `neural-lab-panel.png` ficam em `%TEMP%\neural-doom-lab-ui-check`. O teste confirma que o painel fechado não consulta o banco, carrega o catálogo real e pesos/biases de um genoma existente, valida a contagem de parâmetros e não causa overflow em 390 px. Ele não é uma partida. Para acompanhar o painel durante uma partida headless MySQL real, selecione uma arquitetura com genomas pelo ambiente `DOOM_ARCHITECTURE_NAME` ao executar `node scripts/automated-match.mjs`; os resultados e as capturas continuam fora do Git.
+
+Para comparar a cadência de renderização do navegador com Freedoom E1M1 ativo e o painel recolhido/aberto, sem usar EXTERNAL_AI nem gravar sessão/fitness:
+
+```powershell
+npm run test:neural-lab-fps
+```
+
+O relatório e as capturas ficam em `%TEMP%\neural-doom-lab-fps-check`. A métrica é a cadência de `requestAnimationFrame` do browser durante o jogo; não é um contador interno de FPS do Chocolate Doom. A partida usa ORIGINAL_AI e controles de Playwright, não constitui validação da rede neural.
 
 ## Conferir a partida no Workbench
 

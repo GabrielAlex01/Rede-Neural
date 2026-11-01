@@ -1,5 +1,6 @@
 import './styles.css';
 import { resolveAiWebSocketUrl } from './ai-url.js';
+import { formatTopology, parseTopology } from './neural-lab.js';
 import {
   createAiMetrics,
   formatAiMetrics,
@@ -21,6 +22,9 @@ const AI_WEBSOCKET_URL = resolveAiWebSocketUrl(
   window.location,
   import.meta.env.VITE_AI_WEBSOCKET_URL,
 );
+const AI_HTTP_BASE_URL = import.meta.env.VITE_AI_HTTP_URL
+  || `${window.location.protocol}//${window.location.hostname}:8000`;
+const NEURAL_LAB_STORAGE_KEY = 'neural-doom-lab.architecture';
 const AI_MODE = Object.freeze({ ORIGINAL_AI: 0, EXTERNAL_AI: 1 });
 const AI_ACTION = Object.freeze({
   INVALID: -1,
@@ -186,6 +190,75 @@ app.innerHTML = `
       </section>
     </section>
 
+    <details class="neural-lab panel" id="neural-lab">
+      <summary class="neural-lab-summary">
+        <span><span class="panel-icon" aria-hidden="true">◉</span>Laboratório neural interativo</span>
+        <small id="lab-status">Recolhido — sem consultas em segundo plano</small>
+      </summary>
+      <div class="lab-layout">
+        <section class="lab-card">
+          <h3>Arquitetura para a próxima sessão</h3>
+          <label class="field"><span>Arquitetura</span><select id="lab-architecture-select" disabled><option>Conecte o MySQL para listar</option></select></label>
+          <p class="lab-summary-copy" id="lab-architecture-summary">As opções vêm do schema local. A escolha fica fixa durante cada sessão.</p>
+          <div class="lab-layers" id="lab-layer-list"><p class="lab-empty">Abra o painel para consultar arquiteturas do MySQL.</p></div>
+          <div class="lab-inspect-selectors">
+            <label class="field"><span>Geração para inspeção</span><select id="lab-generation-select" disabled></select></label>
+            <label class="field"><span>Genoma para inspeção</span><select id="lab-genome-select" disabled></select></label>
+          </div>
+          <p class="lab-note">A seleção de genoma serve para inspecionar pesos e resultados. A procedure do MySQL continua atribuindo genomas aos NPCs conforme a geração atual.</p>
+        </section>
+
+        <section class="lab-card">
+          <h3>Criar topologia sem tocar nas existentes</h3>
+          <label class="field"><span>Nome único</span><input id="lab-new-name" maxlength="50" autocomplete="off" placeholder="minha_rede_4_32_4" /></label>
+          <label class="field"><span>Camadas (4 entradas e 4 saídas fixas)</span><input id="lab-new-topology" value="4, 32, 4" inputmode="numeric" /></label>
+          <label class="field"><span>Ativação das camadas ocultas</span><select id="lab-hidden-activation"><option value="relu">ReLU</option><option value="sigmoid">Sigmoid</option><option value="tanh">Tanh</option></select></label>
+          <div class="lab-parameter-count" id="lab-parameter-count">4 → 32 → 4 · 0 pesos · 0 biases · 0 parâmetros</div>
+          <button class="button button-primary lab-button" id="lab-create-architecture" type="button">Criar arquitetura</button>
+          <div class="lab-divider"></div>
+          <h3>População inicial isolada</h3>
+          <label class="field"><span>Indivíduos (2–100)</span><input id="lab-population-size" type="number" min="2" max="100" value="4" /></label>
+          <label class="field"><span>Semente reproduzível (0–4294967295)</span><input id="lab-population-seed" type="number" min="0" max="4294967295" value="20261031" /></label>
+          <button class="button lab-button" id="lab-create-population" type="button" disabled>Inicializar população vazia selecionada</button>
+          <p class="lab-note">Uma população existente nunca é substituída. Criação administrativa só aceita origem local autorizada e chama as procedures já instaladas.</p>
+        </section>
+
+        <section class="lab-card lab-live-card">
+          <h3>Inferência real do jogo</h3>
+          <dl class="lab-live-metrics">
+            <div><dt>Decisão MySQL</dt><dd id="lab-live-action">Aguardando NPC</dd></div>
+            <div><dt>NPC / genoma / geração</dt><dd id="lab-live-identity">—</dd></div>
+            <div><dt>Aplicação no engine</dt><dd id="lab-live-engine-result">Aguardando retorno</dd></div>
+            <div><dt>SQL / banco</dt><dd id="lab-live-latency">—</dd></div>
+            <div><dt>Round trip WebSocket</dt><dd id="lab-live-rtt">—</dd></div>
+            <div><dt>Última execução SQL</dt><dd id="lab-live-run">—</dd></div>
+          </dl>
+          <label class="field"><span>Camada de ativações (valores reais persistidos pelo SQL)</span><select id="lab-inspection-layer" disabled></select></label>
+          <div class="lab-neuron-list" id="lab-activations"><p class="lab-empty">Abra EXTERNAL_AI e aguarde uma decisão SQL para inspecionar.</p></div>
+          <div class="lab-page-controls">
+            <button class="text-button" id="lab-activation-previous" type="button" disabled>← Anterior</button>
+            <span id="lab-activation-page">—</span>
+            <button class="text-button" id="lab-activation-next" type="button" disabled>Próxima →</button>
+          </div>
+          <div class="lab-divider"></div>
+          <h3>Pesos de entrada e bias do neurônio selecionado</h3>
+          <button class="text-button lab-live-genome-button" id="lab-use-live-genome" type="button" disabled>Usar genoma da última inferência</button>
+          <div class="lab-weight-controls">
+            <label class="field"><span>Camada alvo</span><select id="lab-weight-layer" disabled></select></label>
+            <label class="field"><span>Posição do neurônio</span><input id="lab-weight-target" type="number" min="0" value="0" /></label>
+            <button class="button" id="lab-load-weights" type="button">Consultar pesos</button>
+          </div>
+          <p class="lab-bias-value" id="lab-weight-bias">Bias do neurônio selecionado: —</p>
+          <div class="lab-weight-list" id="lab-weights"><p class="lab-empty">Selecione uma geração e um genoma para consultar conexões paginadas.</p></div>
+          <div class="lab-page-controls">
+            <button class="text-button" id="lab-weight-previous" type="button" disabled>← Anterior</button>
+            <span id="lab-weight-page">—</span>
+            <button class="text-button" id="lab-weight-next" type="button" disabled>Próxima →</button>
+          </div>
+        </section>
+      </div>
+    </details>
+
     <section class="log-panel panel">
       <div class="log-heading">
         <h2><span class="panel-icon" aria-hidden="true">▤</span>Log de eventos</h2>
@@ -233,6 +306,62 @@ const aiDebugMetrics = document.querySelector('#ai-debug-metrics');
 const aiDebugBackend = document.querySelector('#ai-debug-backend');
 const connectionStatus = document.querySelector('.connection-status');
 const clearLogButton = document.querySelector('#clear-log-button');
+const neuralLabPanel = document.querySelector('#neural-lab');
+const labStatus = document.querySelector('#lab-status');
+const labArchitectureSelect = document.querySelector('#lab-architecture-select');
+const labArchitectureSummary = document.querySelector('#lab-architecture-summary');
+const labLayerList = document.querySelector('#lab-layer-list');
+const labGenerationSelect = document.querySelector('#lab-generation-select');
+const labGenomeSelect = document.querySelector('#lab-genome-select');
+const labNewName = document.querySelector('#lab-new-name');
+const labNewTopology = document.querySelector('#lab-new-topology');
+const labHiddenActivation = document.querySelector('#lab-hidden-activation');
+const labParameterCount = document.querySelector('#lab-parameter-count');
+const labCreateArchitecture = document.querySelector('#lab-create-architecture');
+const labPopulationSize = document.querySelector('#lab-population-size');
+const labPopulationSeed = document.querySelector('#lab-population-seed');
+const labCreatePopulation = document.querySelector('#lab-create-population');
+const labLiveAction = document.querySelector('#lab-live-action');
+const labLiveIdentity = document.querySelector('#lab-live-identity');
+const labLiveEngineResult = document.querySelector('#lab-live-engine-result');
+const labLiveLatency = document.querySelector('#lab-live-latency');
+const labLiveRtt = document.querySelector('#lab-live-rtt');
+const labLiveRun = document.querySelector('#lab-live-run');
+const labInspectionLayer = document.querySelector('#lab-inspection-layer');
+const labActivations = document.querySelector('#lab-activations');
+const labActivationPrevious = document.querySelector('#lab-activation-previous');
+const labActivationNext = document.querySelector('#lab-activation-next');
+const labActivationPage = document.querySelector('#lab-activation-page');
+const labWeightLayer = document.querySelector('#lab-weight-layer');
+const labWeightTarget = document.querySelector('#lab-weight-target');
+const labLoadWeights = document.querySelector('#lab-load-weights');
+const labWeightBias = document.querySelector('#lab-weight-bias');
+const labWeights = document.querySelector('#lab-weights');
+const labWeightPrevious = document.querySelector('#lab-weight-previous');
+const labWeightNext = document.querySelector('#lab-weight-next');
+const labWeightPage = document.querySelector('#lab-weight-page');
+const labUseLiveGenome = document.querySelector('#lab-use-live-genome');
+
+const neuralLabState = {
+  architectures: [],
+  configuredDefault: null,
+  layers: [],
+  genomes: [],
+  selectedArchitectureId: null,
+  selectedArchitectureName: localStorage.getItem(NEURAL_LAB_STORAGE_KEY) || null,
+  selectedGeneration: null,
+  selectedGenomeId: null,
+  latestDecision: null,
+  liveGenome: null,
+  activationOffset: 0,
+  activationTotal: 0,
+  weightOffset: 0,
+  weightTotal: 0,
+  refreshTimer: null,
+  activationRequestInFlight: false,
+  latestEngineOutcome: 'Aguardando retorno',
+  loading: false,
+};
 
 function appendLog(level, message) {
   const normalized = String(message ?? '').trim();
@@ -252,6 +381,405 @@ function appendLog(level, message) {
   const next = [...existing, ...lines].slice(-120);
   logOutput.textContent = next.join('\n');
   logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+async function labRequest(path, options = {}) {
+  const response = await fetch(new URL(`/api/lab${path}`, AI_HTTP_BASE_URL), {
+    ...options,
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
+    },
+  });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    throw new Error(payload.detail || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function setLabStatus(message, tone = 'muted') {
+  labStatus.textContent = message;
+  labStatus.dataset.tone = tone;
+}
+
+function addLabOption(select, value, label) {
+  const option = document.createElement('option');
+  option.value = String(value);
+  option.textContent = label;
+  select.append(option);
+}
+
+function selectedLabArchitecture() {
+  return neuralLabState.architectures.find(
+    (architecture) => String(architecture.architecture_id) === String(neuralLabState.selectedArchitectureId),
+  ) ?? null;
+}
+
+function renderArchitectureLayers() {
+  labLayerList.replaceChildren();
+  if (!neuralLabState.layers.length) {
+    const empty = document.createElement('p');
+    empty.className = 'lab-empty';
+    empty.textContent = 'Esta arquitetura ainda não tem camadas consultáveis.';
+    labLayerList.append(empty);
+    return;
+  }
+
+  for (const layer of neuralLabState.layers) {
+    const row = document.createElement('div');
+    row.className = 'lab-layer-row';
+    const name = document.createElement('strong');
+    name.textContent = `${layer.layer_order}: ${String(layer.layer_type).toUpperCase()}`;
+    const count = document.createElement('span');
+    count.textContent = `${layer.neuron_count} neurônios`;
+    const detail = document.createElement('small');
+    detail.textContent = layer.io_names || layer.activations || 'ativações configuráveis';
+    row.append(name, count, detail);
+    labLayerList.append(row);
+  }
+}
+
+function setLabLayerOptions(layers) {
+  for (const select of [labInspectionLayer, labWeightLayer]) {
+    select.replaceChildren();
+  }
+  for (const layer of layers) {
+    addLabOption(labInspectionLayer, layer.layer_order,
+      `${layer.layer_order} · ${layer.layer_type} · ${layer.neuron_count} neurônios`);
+    if (layer.layer_order > 0) {
+      addLabOption(labWeightLayer, layer.layer_order,
+        `${layer.layer_order} · ${layer.layer_type} · ${layer.neuron_count} neurônios`);
+    }
+  }
+  const outputLayer = layers.at(-1);
+  if (outputLayer) {
+    labInspectionLayer.value = String(outputLayer.layer_order);
+    labWeightLayer.value = String(Math.max(1, outputLayer.layer_order));
+  }
+  labInspectionLayer.disabled = !layers.length;
+  labWeightLayer.disabled = layers.length < 2 || !neuralLabState.selectedGenomeId;
+}
+
+async function loadLabGenomes() {
+  const architecture = selectedLabArchitecture();
+  if (!architecture) return;
+  const latest = Number.isInteger(Number(architecture.latest_generation))
+    ? Number(architecture.latest_generation)
+    : 0;
+  const generationCount = Math.max(0, Number(architecture.generation_count) || 0);
+  const generations = Array.from({ length: Math.min(generationCount, latest + 1, 256) }, (_, index) => index);
+  labGenerationSelect.replaceChildren();
+  if (!generations.length) generations.push(0);
+  for (const generation of generations) addLabOption(labGenerationSelect, generation, `Geração ${generation}`);
+  const previousGeneration = neuralLabState.selectedGeneration;
+  neuralLabState.selectedGeneration = generations.includes(previousGeneration)
+    ? previousGeneration
+    : latest;
+  if (!generations.includes(latest)) {
+    addLabOption(labGenerationSelect, latest, `Geração ${latest}`);
+  }
+  labGenerationSelect.value = String(neuralLabState.selectedGeneration);
+  labGenerationSelect.disabled = Number(architecture.genome_count) <= 0;
+  labGenomeSelect.replaceChildren();
+  neuralLabState.genomes = [];
+  neuralLabState.selectedGenomeId = null;
+
+  if (Number(architecture.genome_count) <= 0) {
+    addLabOption(labGenomeSelect, '', 'Sem população inicial');
+    labGenomeSelect.disabled = true;
+    labCreatePopulation.disabled = false;
+    labCreatePopulation.textContent = 'Inicializar população vazia selecionada';
+    return;
+  }
+
+  const payload = await labRequest(
+    `/architectures/${architecture.architecture_id}/genomes?generation=${neuralLabState.selectedGeneration}&limit=100&offset=0`,
+  );
+  neuralLabState.genomes = payload.genomes ?? [];
+  for (const genome of neuralLabState.genomes) {
+    const evaluationCount = Number(genome.real_evaluation_count) || 0;
+    addLabOption(labGenomeSelect, genome.genome_id,
+      `#${genome.genome_id} · fitness ${Number(genome.fitness).toFixed(4)} · ${evaluationCount} avaliações reais`);
+  }
+  labGenomeSelect.disabled = !neuralLabState.genomes.length;
+  neuralLabState.selectedGenomeId = neuralLabState.genomes[0]?.genome_id ?? null;
+  if (neuralLabState.selectedGenomeId !== null) {
+    labGenomeSelect.value = String(neuralLabState.selectedGenomeId);
+  }
+  labCreatePopulation.disabled = true;
+  labCreatePopulation.textContent = 'População preservada (já existe)';
+  labWeightLayer.disabled = !neuralLabState.selectedGenomeId || neuralLabState.layers.length < 2;
+}
+
+async function loadLabArchitectureDetails() {
+  const architecture = selectedLabArchitecture();
+  if (!architecture) return;
+  neuralLabState.selectedArchitectureId = architecture.architecture_id;
+  neuralLabState.selectedArchitectureName = architecture.architecture_name;
+  const genomeCount = Number(architecture.genome_count) || 0;
+  const populationStatus = genomeCount > 0
+    ? `${genomeCount} genomas · ${architecture.generation_count} gerações`
+    : 'sem população; não selecionável para decisão até inicializar genomas';
+  labArchitectureSummary.textContent = `${architecture.architecture_name} · ${architecture.topology} · ${architecture.parameter_count ?? (Number(architecture.weight_count) + Number(architecture.bias_count))} parâmetros · ${populationStatus}`;
+  try {
+    const layers = await labRequest(`/architectures/${architecture.architecture_id}/layers`);
+    neuralLabState.layers = layers.layers ?? [];
+    renderArchitectureLayers();
+    setLabLayerOptions(neuralLabState.layers);
+    await loadLabGenomes();
+    if (neuralLabState.latestDecision && neuralLabState.latestDecision.architecture_name === architecture.architecture_name) {
+      scheduleLabRunRefresh(0);
+    }
+    await loadLabWeights();
+    setLabStatus(`${neuralLabState.architectures.length} arquiteturas · MySQL conectado`, 'ok');
+  } catch (error) {
+    setLabStatus(`MySQL indisponível: ${error.message}`, 'error');
+  }
+}
+
+async function loadLabArchitectures(preferredName = null) {
+  if (neuralLabState.loading) return;
+  neuralLabState.loading = true;
+  setLabStatus('Consultando procedures SQL…', 'pending');
+  try {
+    const payload = await labRequest('/architectures');
+    neuralLabState.architectures = payload.architectures ?? [];
+    neuralLabState.configuredDefault = payload.configured_default ?? null;
+    labArchitectureSelect.replaceChildren();
+    if (!neuralLabState.architectures.length) {
+      addLabOption(labArchitectureSelect, '', 'Nenhuma arquitetura cadastrada');
+      labArchitectureSelect.disabled = true;
+      setLabStatus('Schema sem arquiteturas', 'error');
+      return;
+    }
+    for (const architecture of neuralLabState.architectures) {
+      const genomeCount = Number(architecture.genome_count) || 0;
+      addLabOption(labArchitectureSelect, architecture.architecture_name,
+        `${architecture.architecture_name} · ${architecture.topology} · ${genomeCount} genomas`);
+    }
+    const activeSessionArchitecture = aiBridgeState.sessionArchitectureLocked
+      ? neuralLabState.latestDecision?.architectureName || neuralLabState.selectedArchitectureName
+      : null;
+    const requested = activeSessionArchitecture
+      || preferredName
+      || neuralLabState.selectedArchitectureName
+      || neuralLabState.configuredDefault;
+    const selected = neuralLabState.architectures.find((architecture) => architecture.architecture_name === requested)
+      ?? neuralLabState.architectures.find((architecture) => Number(architecture.genome_count) > 0)
+      ?? neuralLabState.architectures[0];
+    neuralLabState.selectedArchitectureName = selected.architecture_name;
+    neuralLabState.selectedArchitectureId = selected.architecture_id;
+    labArchitectureSelect.value = selected.architecture_name;
+    labArchitectureSelect.disabled = false;
+    if (!aiBridgeState.sessionArchitectureLocked) {
+      localStorage.setItem(NEURAL_LAB_STORAGE_KEY, selected.architecture_name);
+    }
+    await loadLabArchitectureDetails();
+  } catch (error) {
+    setLabStatus(`MySQL indisponível: ${error.message}`, 'error');
+    labArchitectureSummary.textContent = 'Não foi possível consultar as arquiteturas. Confirme backend, MySQL e o schema local.';
+  } finally {
+    neuralLabState.loading = false;
+  }
+}
+
+function renderLabActivations(rows) {
+  labActivations.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement('p');
+    empty.className = 'lab-empty';
+    empty.textContent = 'Esta camada não possui ativações neste run.';
+    labActivations.append(empty);
+    return;
+  }
+  const first = rows[0];
+  neuralLabState.liveGenome = {
+    architectureId: first.architecture_id,
+    architectureName: first.architecture_name,
+    genomeId: first.genome_id,
+    generation: first.generation,
+  };
+  labUseLiveGenome.disabled = false;
+  labLiveIdentity.textContent = `NPC ${first.npc_id} · genoma #${first.genome_id} · geração ${first.generation} · ${first.architecture_name}`;
+  labLiveRun.textContent = `#${first.run_id} · ${new Date(first.created_at).toLocaleTimeString()}`;
+  neuralLabState.activationTotal = Number(first.layer_total_neurons) || rows.length;
+  const pageCount = Math.max(1, Math.ceil(neuralLabState.activationTotal / 128));
+  const page = Math.floor(neuralLabState.activationOffset / 128) + 1;
+  labActivationPage.textContent = `Página ${page}/${pageCount} · ${neuralLabState.activationTotal} neurônios`;
+  labActivationPrevious.disabled = neuralLabState.activationOffset <= 0;
+  labActivationNext.disabled = neuralLabState.activationOffset + rows.length >= neuralLabState.activationTotal;
+
+  const maxMagnitude = Math.max(0.000001, ...rows.map((row) => Math.abs(Number(row.activation) || 0)));
+  for (const activation of rows) {
+    const row = document.createElement('div');
+    row.className = 'lab-neuron-row';
+    const label = document.createElement('span');
+    label.textContent = `${activation.io_name || `N${activation.neuron_position}`} · ${activation.neuron_position}`;
+    const bar = document.createElement('span');
+    bar.className = `lab-activation-bar${Number(activation.activation) < 0 ? ' negative' : ''}`;
+    bar.style.setProperty('--activation-size', `${Math.max(1, Math.min(100, Math.abs(Number(activation.activation)) / maxMagnitude * 100))}%`);
+    const value = document.createElement('code');
+    value.textContent = Number(activation.activation).toPrecision(7);
+    row.append(label, bar, value);
+    labActivations.append(row);
+  }
+}
+
+function renderLatestDecisionSummary() {
+  const decision = neuralLabState.latestDecision;
+  if (!neuralLabPanel.open) return;
+  if (!decision) {
+    labLiveEngineResult.textContent = neuralLabState.latestEngineOutcome;
+    return;
+  }
+  labLiveAction.textContent = `${decision.action} · confiança ${Number(decision.confidence).toFixed(4)}`;
+  labLiveEngineResult.textContent = neuralLabState.latestEngineOutcome;
+  labLiveLatency.textContent = `${Number(decision.mysqlInferenceMs).toFixed(2)} ms CALL MySQL · ${Number(decision.databaseRoundTripMs).toFixed(2)} ms backend + banco`;
+  labLiveRtt.textContent = `${Number(decision.websocketRttMs).toFixed(2)} ms browser ↔ backend`;
+  labLiveRun.textContent = `run #${decision.runId} · aguardando ativações persistidas`;
+  labLiveIdentity.textContent = `NPC ${decision.npcId} · ${decision.architectureName || 'arquitetura do backend'}`;
+}
+
+async function refreshLabRun() {
+  if (!neuralLabPanel.open || !neuralLabState.latestDecision || document.hidden
+      || neuralLabState.activationRequestInFlight) return;
+  const layerOrder = Number(labInspectionLayer.value);
+  if (!Number.isInteger(layerOrder)) return;
+  const runId = neuralLabState.latestDecision.runId;
+  neuralLabState.activationRequestInFlight = true;
+  try {
+    const payload = await labRequest(`/runs/${runId}/activations?layer_order=${layerOrder}&limit=128&offset=${neuralLabState.activationOffset}`);
+    if (neuralLabState.latestDecision?.runId === runId) {
+      renderLabActivations(payload.activations ?? []);
+    }
+  } catch (error) {
+    if (error.message !== 'run_or_layer_not_found') {
+      setLabStatus(`Inspeção de ativações: ${error.message}`, 'error');
+    }
+  } finally {
+    neuralLabState.activationRequestInFlight = false;
+  }
+}
+
+function scheduleLabRunRefresh(delay = 900) {
+  if (!neuralLabPanel.open || !neuralLabState.latestDecision) return;
+  if (neuralLabState.refreshTimer) return;
+  neuralLabState.refreshTimer = window.setTimeout(() => {
+    neuralLabState.refreshTimer = null;
+    void refreshLabRun();
+  }, delay);
+}
+
+async function loadLabWeights() {
+  const genomeId = neuralLabState.selectedGenomeId;
+  const layerOrder = Number(labWeightLayer.value);
+  const targetPosition = Number(labWeightTarget.value);
+  if (!neuralLabPanel.open || !genomeId || !Number.isInteger(layerOrder) || !Number.isInteger(targetPosition)) return;
+  try {
+    const payload = await labRequest(
+      `/genomes/${genomeId}/weights?layer_order=${layerOrder}&target_position=${targetPosition}&limit=128&offset=${neuralLabState.weightOffset}`,
+    );
+    const weights = payload.weights ?? [];
+    labWeights.replaceChildren();
+    if (!weights.length) {
+      labWeightBias.textContent = 'Bias do neurônio selecionado: sem dados';
+      const empty = document.createElement('p');
+      empty.className = 'lab-empty';
+      empty.textContent = 'Este neurônio ainda não tem pesos consultáveis para o genoma selecionado.';
+      labWeights.append(empty);
+      labWeightPage.textContent = 'Sem pesos';
+      labWeightPrevious.disabled = true;
+      labWeightNext.disabled = true;
+      return;
+    }
+    const first = weights[0];
+    labWeightBias.textContent = first.target_bias !== null
+      && first.target_bias !== undefined
+      && Number.isFinite(Number(first.target_bias))
+      ? `Bias do neurônio ${first.target_position}: ${Number(first.target_bias).toPrecision(7)}`
+      : `Bias do neurônio ${first.target_position}: indisponível`;
+    neuralLabState.weightTotal = Number(first.incoming_weight_count) || weights.length;
+    const pageCount = Math.max(1, Math.ceil(neuralLabState.weightTotal / 128));
+    const page = Math.floor(neuralLabState.weightOffset / 128) + 1;
+    labWeightPage.textContent = `Página ${page}/${pageCount} · ${neuralLabState.weightTotal} pesos`;
+    labWeightPrevious.disabled = neuralLabState.weightOffset <= 0;
+    labWeightNext.disabled = neuralLabState.weightOffset + weights.length >= neuralLabState.weightTotal;
+    const maxMagnitude = Math.max(0.000001, ...weights.map((item) => Math.abs(Number(item.weight) || 0)));
+    for (const weight of weights) {
+      const row = document.createElement('div');
+      row.className = 'lab-weight-row';
+      const label = document.createElement('span');
+      label.textContent = `N${weight.source_position} → N${weight.target_position}`;
+      const bar = document.createElement('span');
+      bar.className = `lab-weight-bar${Number(weight.weight) < 0 ? ' negative' : ''}`;
+      bar.style.setProperty('--weight-size', `${Math.max(1, Math.min(100, Math.abs(Number(weight.weight)) / maxMagnitude * 100))}%`);
+      const value = document.createElement('code');
+      value.textContent = Number(weight.weight).toPrecision(7);
+      row.append(label, bar, value);
+      labWeights.append(row);
+    }
+  } catch (error) {
+    labWeights.textContent = `Não foi possível consultar os pesos: ${error.message}`;
+  }
+}
+
+function updateTopologyEstimate() {
+  try {
+    const metrics = parseTopology(labNewTopology.value);
+    labParameterCount.textContent = `${formatTopology(metrics.topology)} · ${metrics.weights.toLocaleString()} pesos · ${metrics.biases.toLocaleString()} biases · ${metrics.parameters.toLocaleString()} parâmetros treináveis`;
+    labParameterCount.dataset.valid = 'true';
+  } catch (error) {
+    labParameterCount.textContent = error.message;
+    labParameterCount.dataset.valid = 'false';
+  }
+}
+
+async function submitLabArchitecture() {
+  try {
+    const topology = parseTopology(labNewTopology.value).topology;
+    const name = labNewName.value.trim();
+    if (!name) throw new Error('Informe um nome único para a arquitetura.');
+    labCreateArchitecture.disabled = true;
+    setLabStatus('Criando arquitetura por procedure SQL…', 'pending');
+    await labRequest('/architectures', {
+      method: 'POST',
+      body: JSON.stringify({ architecture_name: name, topology, hidden_activation: labHiddenActivation.value }),
+    });
+    setLabStatus('Arquitetura criada; nenhum genoma foi sobrescrito.', 'ok');
+    await loadLabArchitectures(name);
+  } catch (error) {
+    setLabStatus(`Arquitetura não criada: ${error.message}`, 'error');
+  } finally {
+    labCreateArchitecture.disabled = false;
+  }
+}
+
+async function submitLabPopulation() {
+  const architecture = selectedLabArchitecture();
+  if (!architecture) return;
+  try {
+    const populationSize = Number(labPopulationSize.value);
+    const seed = Number(labPopulationSeed.value);
+    labCreatePopulation.disabled = true;
+    setLabStatus('Inicializando população vazia por procedure SQL…', 'pending');
+    await labRequest(`/architectures/${encodeURIComponent(architecture.architecture_name)}/population`, {
+      method: 'POST',
+      body: JSON.stringify({ population_size: populationSize, seed }),
+    });
+    setLabStatus(`População criada com semente ${seed}; experimentos existentes preservados.`, 'ok');
+    await loadLabArchitectures(architecture.architecture_name);
+  } catch (error) {
+    setLabStatus(`População não criada: ${error.message}`, 'error');
+    labCreatePopulation.disabled = false;
+  }
 }
 
 function mockDecisionProvider(npcState) {
@@ -281,6 +809,7 @@ const aiBridgeState = {
   pending: new Map(),
   reconnectTimer: null,
   requestSequence: 0,
+  sessionArchitectureLocked: false,
   socket: null,
 };
 
@@ -478,7 +1007,29 @@ function connectAiBackend() {
         action,
         npcState: pendingRequest.npcState,
         receivedAt: Date.now(),
+        requestStartedAtPerformance: pendingRequest.performanceStartedAt,
+        runId: response.run_id,
+        architectureName: response.architecture_name,
+        mysqlInferenceMs: response.mysql_inference_ms,
+        databaseRoundTripMs: response.database_round_trip_ms,
       });
+      const websocketRttMs = performance.now() - pendingRequest.performanceStartedAt;
+      neuralLabState.latestDecision = {
+        runId: response.run_id,
+        npcId: response.npc_id,
+        architectureName: response.architecture_name || neuralLabState.selectedArchitectureName,
+        action: response.action,
+        confidence: response.confidence,
+        mysqlInferenceMs: response.mysql_inference_ms,
+        databaseRoundTripMs: response.database_round_trip_ms,
+        websocketRttMs,
+      };
+      neuralLabState.latestEngineOutcome = 'Aguardando confirmação do engine';
+      if (response.architecture_name && !neuralLabState.architectures.length) {
+        neuralLabState.selectedArchitectureName = response.architecture_name;
+      }
+      renderLatestDecisionSummary();
+      scheduleLabRunRefresh();
     } catch (error) {
       appendLog('error', `[AI BRIDGE] invalid backend JSON; ORIGINAL_AI fallback active: ${error}`);
     }
@@ -591,6 +1142,8 @@ async function finishAiSession() {
   aiBridgeState.decisions.clear();
   aiBridgeState.inflight.clear();
   aiBridgeState.lastRequestAtByNpc.clear();
+  aiBridgeState.sessionArchitectureLocked = false;
+  labArchitectureSelect.disabled = neuralLabState.architectures.length === 0;
   return closed;
 }
 
@@ -612,11 +1165,20 @@ function requestBackendDecision(npcState) {
 
   const requestId = `${npcState.npc_id}-${now}-${++aiBridgeState.requestSequence}`;
   aiBridgeState.lastRequestAtByNpc.set(npcId, now);
-  aiBridgeState.inflight.set(requestId, { npcState, sentAt: now, sessionId: state.sessionId });
+  aiBridgeState.sessionArchitectureLocked = true;
+  labArchitectureSelect.disabled = true;
+  const performanceStartedAt = performance.now();
+  aiBridgeState.inflight.set(requestId, {
+    npcState,
+    sentAt: now,
+    performanceStartedAt,
+    sessionId: state.sessionId,
+  });
   aiBridgeState.socket.send(JSON.stringify({
     type: 'npc_state',
     request_id: requestId,
     session_id: state.sessionId,
+    architecture_name: neuralLabState.selectedArchitectureName,
     npc: npcState,
   }));
 }
@@ -645,6 +1207,8 @@ globalThis.doomNeuralAIBridge = {
             actionName,
             npcState,
             source: 'backend',
+            requestStartedAtPerformance: decision.requestStartedAtPerformance,
+            offeredAtPerformance: performance.now(),
           });
           return decision.action;
         }
@@ -655,6 +1219,11 @@ globalThis.doomNeuralAIBridge = {
         ? 'waiting_for_mysql'
         : 'backend_offline';
       recordFallback(aiBridgeState.metrics, fallbackReason);
+      neuralLabState.latestEngineOutcome = 'Ação neural ausente; controle mantido pela IA original';
+      if (neuralLabPanel.open) {
+        labLiveAction.textContent = `ORIGINAL_AI fallback · ${fallbackReason}`;
+        labLiveEngineResult.textContent = neuralLabState.latestEngineOutcome;
+      }
 
       if (now - aiBridgeState.lastFallbackLogAt >= 1000) {
         const reason = aiBridgeState.socket?.readyState === WebSocket.OPEN
@@ -687,6 +1256,11 @@ globalThis.doomNeuralAIBridge = {
 
     if (pending.source === 'backend') {
       recordEngineResult(aiBridgeState.metrics, pending.actionName, result.applied);
+      const endToEndMs = performance.now() - pending.requestStartedAtPerformance;
+      neuralLabState.latestEngineOutcome = result.applied
+        ? `${pending.actionName} aceita e aplicada pelo engine · ${endToEndMs.toFixed(2)} ms desde a consulta`
+        : `${pending.actionName} rejeitada pelo engine · ${endToEndMs.toFixed(2)} ms; fallback ORIGINAL_AI`;
+      if (neuralLabPanel.open) labLiveEngineResult.textContent = neuralLabState.latestEngineOutcome;
     }
 
     const now = Date.now();
@@ -1059,6 +1633,113 @@ wadInput.addEventListener('change', async (event) => {
   await cacheUploads(files);
 });
 aiMode.addEventListener('change', () => syncAiMode());
+neuralLabPanel.addEventListener('toggle', () => {
+  if (!neuralLabPanel.open) return;
+  renderLatestDecisionSummary();
+  labArchitectureSelect.disabled = aiBridgeState.sessionArchitectureLocked;
+  if (!neuralLabState.architectures.length) {
+    void loadLabArchitectures();
+  } else {
+    void loadLabArchitectureDetails();
+    scheduleLabRunRefresh(0);
+  }
+});
+labArchitectureSelect.addEventListener('change', () => {
+  if (aiBridgeState.sessionArchitectureLocked) {
+    labArchitectureSelect.value = neuralLabState.selectedArchitectureName ?? '';
+    setLabStatus('A arquitetura desta sessão já foi fixada; selecione outra após encerrá-la.', 'error');
+    return;
+  }
+  const selected = neuralLabState.architectures.find(
+    (architecture) => architecture.architecture_name === labArchitectureSelect.value,
+  );
+  if (!selected) return;
+  neuralLabState.selectedArchitectureId = selected.architecture_id;
+  neuralLabState.selectedArchitectureName = selected.architecture_name;
+  neuralLabState.selectedGeneration = null;
+  neuralLabState.activationOffset = 0;
+  neuralLabState.weightOffset = 0;
+  localStorage.setItem(NEURAL_LAB_STORAGE_KEY, selected.architecture_name);
+  void loadLabArchitectureDetails();
+});
+labGenerationSelect.addEventListener('change', () => {
+  neuralLabState.selectedGeneration = Number(labGenerationSelect.value);
+  neuralLabState.weightOffset = 0;
+  void loadLabGenomes().then(loadLabWeights);
+});
+labGenomeSelect.addEventListener('change', () => {
+  neuralLabState.selectedGenomeId = Number(labGenomeSelect.value) || null;
+  neuralLabState.weightOffset = 0;
+  labWeightLayer.disabled = !neuralLabState.selectedGenomeId || neuralLabState.layers.length < 2;
+  void loadLabWeights();
+});
+labInspectionLayer.addEventListener('change', () => {
+  neuralLabState.activationOffset = 0;
+  scheduleLabRunRefresh(0);
+});
+labActivationPrevious.addEventListener('click', () => {
+  neuralLabState.activationOffset = Math.max(0, neuralLabState.activationOffset - 128);
+  void refreshLabRun();
+});
+labActivationNext.addEventListener('click', () => {
+  if (neuralLabState.activationOffset + 128 < neuralLabState.activationTotal) {
+    neuralLabState.activationOffset += 128;
+    void refreshLabRun();
+  }
+});
+labWeightLayer.addEventListener('change', () => {
+  neuralLabState.weightOffset = 0;
+  void loadLabWeights();
+});
+labWeightTarget.addEventListener('change', () => {
+  neuralLabState.weightOffset = 0;
+  void loadLabWeights();
+});
+labLoadWeights.addEventListener('click', () => {
+  neuralLabState.weightOffset = 0;
+  void loadLabWeights();
+});
+labUseLiveGenome.addEventListener('click', async () => {
+  const liveGenome = neuralLabState.liveGenome;
+  if (!liveGenome) return;
+  if (String(liveGenome.architectureId) !== String(neuralLabState.selectedArchitectureId)) {
+    setLabStatus('O genoma vivo pertence a outra arquitetura; a sessão atual preserva sua seleção.', 'error');
+    return;
+  }
+  neuralLabState.selectedGeneration = Number(liveGenome.generation);
+  const generationAvailable = [...labGenerationSelect.options]
+    .some((option) => Number(option.value) === neuralLabState.selectedGeneration);
+  if (!generationAvailable) {
+    addLabOption(labGenerationSelect, neuralLabState.selectedGeneration, `Geração ${neuralLabState.selectedGeneration}`);
+  }
+  labGenerationSelect.value = String(neuralLabState.selectedGeneration);
+  await loadLabGenomes();
+  const liveOption = neuralLabState.genomes.find(
+    (genome) => String(genome.genome_id) === String(liveGenome.genomeId),
+  );
+  if (liveOption) {
+    neuralLabState.selectedGenomeId = liveOption.genome_id;
+    labGenomeSelect.value = String(liveOption.genome_id);
+    neuralLabState.weightOffset = 0;
+    await loadLabWeights();
+    setLabStatus(`Inspecionando o genoma #${liveGenome.genomeId} usado pelo NPC.`, 'ok');
+  } else {
+    setLabStatus('O genoma vivo não está na página atual de inspeção.', 'error');
+  }
+});
+labWeightPrevious.addEventListener('click', () => {
+  neuralLabState.weightOffset = Math.max(0, neuralLabState.weightOffset - 128);
+  void loadLabWeights();
+});
+labWeightNext.addEventListener('click', () => {
+  if (neuralLabState.weightOffset + 128 < neuralLabState.weightTotal) {
+    neuralLabState.weightOffset += 128;
+    void loadLabWeights();
+  }
+});
+labNewTopology.addEventListener('input', updateTopologyEstimate);
+labCreateArchitecture.addEventListener('click', () => void submitLabArchitecture());
+labCreatePopulation.addEventListener('click', () => void submitLabPopulation());
 aiProvider.addEventListener('change', () => {
   if (aiProvider.value === 'backend') {
     if (aiMode.value === 'external') {
@@ -1087,6 +1768,10 @@ window.addEventListener('pagehide', () => {
   }));
 });
 
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && neuralLabPanel.open) scheduleLabRunRefresh(0);
+});
+
 canvas.addEventListener('click', () => {
   if (state.running) {
     canvas.focus();
@@ -1094,6 +1779,7 @@ canvas.addEventListener('click', () => {
 });
 
 setStatus('Ready');
+updateTopologyEstimate();
 updateButtons();
 syncSelectionSummary();
 renderPersistedSelection();
